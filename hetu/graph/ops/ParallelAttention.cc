@@ -19,12 +19,12 @@ static int64_t get_local_seq_len(const Tensor& input, const SyShapeList& multi_s
     return multi_seq_lens_symbol.at(0).at(0)->get_val();
   }
   HT_ASSERT(multi_seq_lens_symbol.size() == graph.NUM_STRATEGY 
-            && graph.CUR_STRATEGY_ID < multi_seq_lens_symbol.size())
+            && graph.COMPUTE_STRATEGY_ID < multi_seq_lens_symbol.size())
     << "strategy num should be matched";
   HT_ASSERT(!input->cur_ds_union().is_hetero() 
-            || input->cur_ds_union().size() == multi_seq_lens_symbol.at(graph.CUR_STRATEGY_ID).size())
+            || input->cur_ds_union().size() == multi_seq_lens_symbol.at(graph.COMPUTE_STRATEGY_ID).size())
     << "ds union size and seq lens symbol size should be matched";
-  auto& seq_lens_symbol = multi_seq_lens_symbol[graph.CUR_STRATEGY_ID];
+  auto& seq_lens_symbol = multi_seq_lens_symbol[graph.COMPUTE_STRATEGY_ID];
   if (graph.USE_HETERO_ID) {
     return seq_lens_symbol.at(graph.CUR_HETERO_ID)->get_val();
   } else {
@@ -71,10 +71,10 @@ static std::tuple<int64_t, DeviceGroupList, std::vector<int64_t>> get_local_ring
   auto local_device = hetu::impl::comm::GetLocalDevice();
   HT_ASSERT(multi_seq_lens_symbol.size() == multi_cp_group_symbol.size() 
             && multi_seq_lens_symbol.size() == graph.NUM_STRATEGY 
-            && graph.CUR_STRATEGY_ID < multi_seq_lens_symbol.size())
+            && graph.COMPUTE_STRATEGY_ID < multi_seq_lens_symbol.size())
     << "strategy num should be matched";
-  auto& seq_lens_symbol = multi_seq_lens_symbol[graph.CUR_STRATEGY_ID];
-  auto& cp_group_symbol = multi_cp_group_symbol[graph.CUR_STRATEGY_ID];
+  auto& seq_lens_symbol = multi_seq_lens_symbol[graph.COMPUTE_STRATEGY_ID];
+  auto& cp_group_symbol = multi_cp_group_symbol[graph.COMPUTE_STRATEGY_ID];
   auto dcp_size = cp_group_symbol.size();
   HT_ASSERT(dcp_size == seq_lens_symbol.size())
     << "dcp size should be matched";

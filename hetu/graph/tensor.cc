@@ -124,31 +124,72 @@ size_t TensorDef::cur_hetero_id() const {
   return graph().CUR_HETERO_ID;
 }
 
+bool TensorDef::has_cur_ds_union() {
+  if (graph().type() == GraphType::EXECUTABLE) {
+    HT_ASSERT(_ds_hierarchy.size() <= 1)
+      << "ExecutableGraph only has at most one single strategy"
+      << ", but found " << name() << " has " << _ds_hierarchy.size() << " strategy";
+    return _ds_hierarchy.size() == 1;
+  } 
+  return cur_strategy_id() < _ds_hierarchy.size();
+}
+
 DistributedStatesUnion& TensorDef::cur_ds_union() {
+  // 2024.9.25 Update
+  // 限制executable graph只有一个strategy
+  if (graph().type() == GraphType::EXECUTABLE) {
+    if (_ds_hierarchy.size() == 0) {
+      HT_ASSERT(graph().CREATE_STRATEGY)
+        << "ExecutableGraph ds union is constructed only through define graph instantiate or make op in exec graph"
+        << ", but found " << name() << " disobey the rule";
+      _ds_hierarchy.add(DistributedStatesUnion());
+      return _ds_hierarchy.get(0);
+    }
+    HT_ASSERT(_ds_hierarchy.size() == 1)
+      << "ExecutableGraph only has one single strategy"
+      << ", but found " << name() << " has " << _ds_hierarchy.size() << " strategy";
+    return _ds_hierarchy.get(0);
+  }
   if (graph().CREATE_STRATEGY) {
-    while (cur_strategy_id() >= _ds_hierarchy.size()) {
+    while (graph().CUR_STRATEGY_ID >= _ds_hierarchy.size()) {
       _ds_hierarchy.add(DistributedStatesUnion());
     }
+  }
+  // 没有开deduce states的op的输出
+  if (_ds_hierarchy.size() == 0) {
+    return _dummy_ds_union;
   }
   HT_ASSERT(graph().CUR_STRATEGY_ID < _ds_hierarchy.size())
     << name() << " strategy id out of range: " 
     << graph().CUR_STRATEGY_ID << " is larger than " << _ds_hierarchy.size() 
     << ", the CREATE_STRATEGY is " << graph().CREATE_STRATEGY;
-  return _ds_hierarchy.get(cur_strategy_id());
+  return _ds_hierarchy.get(graph().CUR_STRATEGY_ID);
 }
 
 void TensorDef::set_cur_ds_union(const DistributedStatesUnion& ds_union) {
+  // 2024.9.25 Update
+  // 限制executable graph只有一个strategy
+  if (graph().type() == GraphType::EXECUTABLE) {
+    if (_ds_hierarchy.size() == 0) {
+      _ds_hierarchy.add(ds_union);
+      return;
+    }
+    HT_ASSERT(_ds_hierarchy.size() == 1)
+      << "ExecutableGraph only has one single strategy";
+    _ds_hierarchy.get(0) = ds_union;
+    return;
+  }
   // 未在InferMeta时DeduceStatesHierarchy的tensor
   if (_ds_hierarchy.size() == 0) {
-    while (cur_strategy_id() >= _ds_hierarchy.size()) {
+    while (graph().CUR_STRATEGY_ID >= _ds_hierarchy.size()) {
       _ds_hierarchy.add(DistributedStatesUnion());
     }
-    _ds_hierarchy.get(cur_strategy_id()) = ds_union;
+    _ds_hierarchy.get(graph().CUR_STRATEGY_ID) = ds_union;
   }
   // 其余情况必须要求_hierarchy已准备妥当
   HT_ASSERT(graph().CUR_STRATEGY_ID < _ds_hierarchy.size())
     << "Strategy id out of range";
-  _ds_hierarchy.get(cur_strategy_id()) = ds_union;
+  _ds_hierarchy.get(graph().CUR_STRATEGY_ID) = ds_union;
 }
 
 // 对于不同阶段下的tensor

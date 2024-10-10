@@ -242,9 +242,7 @@ class TensorDef : public shared_ptr_target {
 
   NDArray get_or_compute();
 
-  bool has_cur_ds_union() {
-    return cur_strategy_id() < _ds_hierarchy.size();
-  }
+  bool has_cur_ds_union();
 
   DistributedStatesUnion& cur_ds_union();
 
@@ -256,9 +254,12 @@ class TensorDef : public shared_ptr_target {
     return _ds_hierarchy;
   }
 
+  // executable graph now only need set_cur_ds_union() method
+  /*
   void set_ds_hierarchy(const DistributedStatesHierarchy& ds_hierarchy) {
     _ds_hierarchy = ds_hierarchy;
   }
+  */
 
   bool check_ds_hierarchy_equal(const DistributedStatesHierarchy& ds_hierarchy) {
     if (_ds_hierarchy.size() != ds_hierarchy.size()) {
@@ -377,6 +378,19 @@ class TensorDef : public shared_ptr_target {
     return _symbolic_shape;
   }
 
+  SyShape symbolic_global_shape() {
+    HT_ASSERT(_symbolic) 
+      << name() << ": symbolic_global_shape() can only work after calling copy/set/init symbolic_shape";
+    if (!has_distributed_states()) {
+      return _symbolic_shape;
+    }
+    SyShape sy_global_shape;
+    for (size_t d = 0; d < _symbolic_shape.size(); d++) {
+      sy_global_shape.emplace_back(_symbolic_shape[d] * inferred_cur_ds().get_dim(d));
+    }
+    return sy_global_shape;
+  }
+
   void set_shape(const HTShape& shape) {
     _meta.set_shape(shape);
     // no need to set _global_shape
@@ -434,6 +448,7 @@ class TensorDef : public shared_ptr_target {
   bool _inform_graph_on_destruction;
   // deprecated: DistributedStatesList _distributed_states; // for multi ds deduce
   DistributedStatesHierarchy _ds_hierarchy; // for multi ds multi hetero-dp deduce
+  DistributedStatesUnion _dummy_ds_union{}; // for deduce_states=False op outputs
   HTShape _global_shape;
   bool _is_grad{false};
 

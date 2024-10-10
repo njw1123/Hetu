@@ -332,11 +332,11 @@ class ParamSlice {
 
   public:
     ParamSlice(const TensorName& block_name, 
-               const HTShape& slice_shape,
+               const SyShape& sy_slice_shape,
                const std::vector<int32_t>& slice_num,
                SwitchExecGraph* switcher): 
       _block_name(block_name),
-      _slice_shape(slice_shape),
+      _sy_slice_shape(sy_slice_shape),
       _slice_num(slice_num),
       _switcher(switcher) {
     }
@@ -350,12 +350,13 @@ class ParamSlice {
     }
 
     const size_t numel() const {
-      if (_slice_shape.size() == 0) {
+      if (_sy_slice_shape.size() == 0) {
         HT_LOG_WARN << "ParamSlice with 0 numel";
         return 0;
       }
       size_t numel = 1;
-      for(auto s : _slice_shape) {
+      auto slice_shape = get_HTShape_from_SyShape(_sy_slice_shape);
+      for(auto s : slice_shape) {
         numel *= s;
       }
       return numel;
@@ -384,7 +385,7 @@ class ParamSlice {
     // 在一个block中的slice编号
     // 例如block有3*2*5个slice
     // 那么一个合法的_slice_num就是{2,1,3}
-    HTShape _slice_shape;
+    SyShape _sy_slice_shape;
     std::vector<int32_t> _slice_num; 
     SwitchExecGraph* _switcher;
 
@@ -404,11 +405,11 @@ class ParamBlock {
   public:
     ParamBlock(const TensorName& block_name, 
                const std::vector<int32_t>& block_shape,
-               const HTShape& slice_shape,
+               const SyShape& sy_slice_shape,
                SwitchExecGraph* switcher):
       _block_name(block_name), 
       _block_shape(block_shape),
-      _slice_shape(slice_shape),
+      _sy_slice_shape(sy_slice_shape),
       _switcher(switcher) {
     }
 
@@ -420,8 +421,8 @@ class ParamBlock {
       return _block_shape;
     }
 
-    const HTShape& SliceShape() const {
-      return _slice_shape;
+    const SyShape& SySliceShape() const {
+      return _sy_slice_shape;
     }
 
     std::vector<std::shared_ptr<ParamSlice>>& GetParamSlices() {
@@ -449,7 +450,7 @@ class ParamBlock {
 
   protected:
     std::vector<int32_t> _block_shape; // # of the abstract slices
-    HTShape _slice_shape; // # of the actual elements
+    SyShape _sy_slice_shape; // # of the actual elements
     TensorName _block_name;
     SwitchExecGraph* _switcher;
 
@@ -464,13 +465,17 @@ class SwitchExecGraph {
     friend class ParamSlice;
 
   public:
-    SwitchExecGraph() {}
+    SwitchExecGraph(const std::unordered_set<Device>& comm_set = {}):
+      _comm_set(comm_set) {
+    }
+    
     SwitchExecGraph(DefineAndRunGraph* define_graph, 
                     size_t plan_before, 
                     size_t plan_after,
                     DataType dtype,
                     int32_t bucket_num = -1,
-                    std::unordered_set<Device> comm_set = {}):
+                    const std::unordered_set<Device>& comm_set = {},
+                    const std::unordered_map<DataType, DataType>& dtype_to_filter_dtype = {}):
       _define_graph(define_graph),
       _dtype(dtype),
       _bucket_num(bucket_num),
@@ -481,15 +486,19 @@ class SwitchExecGraph {
       const auto& define_graph_params_unfiltered = define_graph->params();
       const auto& define_graph_params_and_opt_vars_unfiltered = define_graph->params_and_opt_vars();
       TensorCRefList define_graph_params, define_graph_params_and_opt_vars;
-      // 筛选出dtype类型的
-      for (const auto& param_and_opt_var_unfiltered_ref : define_graph_params_and_opt_vars_unfiltered) {
-        if (param_and_opt_var_unfiltered_ref.get()->dtype() == _dtype) {
-          define_graph_params_and_opt_vars.emplace_back(param_and_opt_var_unfiltered_ref);
+      // 筛选出filter dtype类型的
+      auto it = dtype_to_filter_dtype.find(_dtype);
+      if (it != dtype_to_filter_dtype.end()) {
+        auto filter_dtype = it->second;
+        for (const auto& param_and_opt_var_unfiltered_ref : define_graph_params_and_opt_vars_unfiltered) {
+          if (param_and_opt_var_unfiltered_ref.get()->dtype() == filter_dtype) {
+            define_graph_params_and_opt_vars.emplace_back(param_and_opt_var_unfiltered_ref);
+          }
         }
-      }
-      for (const auto& param_unfiltered_ref : define_graph_params_unfiltered) {
-        if (param_unfiltered_ref.get()->dtype() == _dtype) {
-          define_graph_params.emplace_back(param_unfiltered_ref);
+        for (const auto& param_unfiltered_ref : define_graph_params_unfiltered) {
+          if (param_unfiltered_ref.get()->dtype() == filter_dtype) {
+            define_graph_params.emplace_back(param_unfiltered_ref);
+          }
         }
       }
       // 分别设置_define_graph_params和_define_graph_params_and_opt_vars
@@ -589,7 +598,7 @@ class SwitchExecGraph {
                           int32_t dim);
 
     void MakeAllParamSlices(const Tensor& param, ParamBlock& block, 
-                            const Device& device, const DeviceGroup& group,
+                            const Device& device, const DeviceGroupUnion& pg_union,
                             std::vector<int32_t>& slice_num, std::vector<int32_t>& slice_relative_num,
                             const std::unordered_map<int32_t, int32_t>& state,
                             const std::vector<int32_t>& multiple, int32_t dim,
@@ -598,7 +607,7 @@ class SwitchExecGraph {
                             const StreamIndex comp_stream_idx);
 
     Tensor MergeAllParamSlices(const Tensor& param, ParamBlock& block, 
-                               const Device& device, const DeviceGroup& group,
+                               const Device& device, const DeviceGroupUnion& pg_union,
                                std::vector<int32_t>& slice_num, std::vector<int32_t>& slice_relative_num,
                                const std::unordered_map<int32_t, int32_t>& state,
                                const std::vector<int32_t>& multiple, int32_t dim,
@@ -621,7 +630,7 @@ class SwitchExecGraph {
 
     void SwitchParam(const DistributedStatesUnion& src_ds_union, const DeviceGroupUnion& src_group_union,
                      const DistributedStatesUnion& dst_ds_union, const DeviceGroupUnion& dst_group_union,
-                     const Tensor& comm_input, const Tensor& after_param, const HTShape& global_shape,
+                     const Tensor& comm_input, const Tensor& after_param, const SyShape& sy_global_shape,
                      const StreamIndex comp_stream_idx);
 
     void ProfileRunningDetails();
@@ -671,8 +680,8 @@ class SwitchExecGraph {
 
 class ComplexExecComm : public SwitchExecGraph {
   public:
-    ComplexExecComm(const Operator& comm_op, const CommOpInfo& comm_info): 
-      SwitchExecGraph(),
+    ComplexExecComm(const Operator& comm_op, const CommOpInfo& comm_info, const std::unordered_set<Device>& comm_set = {}): 
+      SwitchExecGraph(comm_set),
       _is_instantiated(false),
       _comm_op(comm_op),
       _comm_info(comm_info) {

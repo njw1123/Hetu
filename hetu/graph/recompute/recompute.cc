@@ -55,7 +55,7 @@ void Recompute::GetMaxRecomputeSubGraph(Op2OpRefMap& recompute_subgraph, bool ge
       for (auto& input : op_inputs) {
         auto& op = input->producer();
         // HT_LOG_TRACE << op_ref.get() << " input op " << op;
-        if (op->placement_group_union().has(local_device) && op->op_meta().get_recompute(op->graph().CUR_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID)
+        if (op->placement_group_union().has(local_device) && op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID)
             && !IsNoRecomputedOp(op) && recompute_subgraph.find(op->id()) == recompute_subgraph.end()) {
           to_visit.push(std::ref(op));
         }
@@ -69,7 +69,7 @@ void Recompute::GetMaxRecomputeSubGraph(Op2OpRefMap& recompute_subgraph, bool ge
         for (auto& op_ref : out_consumers) {
           auto& op = op_ref.get();
           // HT_LOG_TRACE << "and output op " << op;
-          if (op->placement_group_union().has(local_device) && op->op_meta().get_recompute(op->graph().CUR_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID) 
+          if (op->placement_group_union().has(local_device) && op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID) 
               && !IsNoRecomputedOp(op) && recompute_subgraph.find(op->id()) == recompute_subgraph.end()) {
             to_visit.push(op_ref);
           }
@@ -151,6 +151,10 @@ Operator& Recompute::DuplicateRecomputedOp(const Operator& origin_op, const Op2O
   if (is_comm_op(origin_op) || is_parallel_attn_op(origin_op)) {
     origin_op->graph().CUR_HETERO_ID = 0;
   }
+  if (origin_op->graph().GetSubGraph(const_cast<Operator&>(origin_op)) != nullptr) {
+    origin_op->graph().AddOpToSubGraph(new_op, origin_op->graph().GetSubGraph(const_cast<Operator&>(origin_op))->global_name(), 
+                                       origin_op->graph().GetSubGraphOpType(const_cast<Operator&>(origin_op)));
+  }
   // HT_LOG_TRACE << "make op done, the output 0 shape is " << new_op->output(0)->shape();
   for (size_t i = 0; i < new_op->num_outputs(); i++) {
     const auto& new_output = new_op->output(i);
@@ -170,7 +174,8 @@ Operator& Recompute::DuplicateRecomputedOp(const Operator& origin_op, const Op2O
   new_op->Instantiate(origin_op->instantiation_ctx().placement, 
                       origin_op->instantiation_ctx().stream_index);
   for (auto i = 0; i < origin_op->num_outputs(); i++) {
-    new_op->output(i)->set_ds_hierarchy(origin_op->output(i)->ds_hierarchy());
+    // new_op->output(i)->set_ds_hierarchy(origin_op->output(i)->ds_hierarchy());
+    new_op->output(i)->set_cur_ds_union(origin_op->output(i)->cur_ds_union());
   }
   origin_to_recomputed_map.insert({origin_op->id(), new_op});
   return origin_to_recomputed_map[origin_op->id()];
@@ -188,9 +193,9 @@ void Recompute::InsertRecomputedOps(const OpRefList& topo_order) {
   OpRefList candidate_recomputed_ops;
   for (auto& op_ref : topo_order) {
     auto& op = op_ref.get();
-    HT_LOG_TRACE << "[Recompute] " << op << " recompute is " << op->op_meta().get_recompute(op->graph().CUR_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID);
+    HT_LOG_TRACE << "[Recompute] " << op << " recompute is " << op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID);
     if (!op->placement_group_union().has(local_device) 
-        || !op->op_meta().get_recompute(op->graph().CUR_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID)
+        || !op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID)
         || IsNoRecomputedOp(op)) {
       continue;
     }

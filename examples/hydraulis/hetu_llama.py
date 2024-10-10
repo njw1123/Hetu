@@ -93,7 +93,7 @@ class LLamaAttention(ht.nn.Module):
         '''
         
         assert self.use_flash_attn, "currently only support flash attn"
-        # TODO: support packing api
+        # already support packing api
         attn_output = ht.parallel_attn(
             qkv,             
             self.head_dim, 

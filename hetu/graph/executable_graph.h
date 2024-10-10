@@ -70,11 +70,15 @@ class ExecutableGraph : public Graph {
 
   NDArrayList Run(const Tensor& loss, const TensorList& fetches, 
                   const FeedDict& feed_dict = {}, const int num_micro_batches = 1,
-                  const int cur_strategy_id = 0, RunLevel run_level = RunLevel::UPDATE, const double grad_scale = 1);
+                  RunLevel run_level = RunLevel::UPDATE, const double grad_scale = 1);
 
   GraphType type() const {
     return GraphType::EXECUTABLE;
   }
+
+  void SortOptimizeComputeBridgeSubgraph();
+
+  void SortComputeOptimizeBridgeSubgraph();
 
   void SetPipeline(const Device2PipelineMap& pipeline_map) {
     _pipeline_map = pipeline_map;
@@ -152,8 +156,21 @@ class ExecutableGraph : public Graph {
   void RecordExecTensor(const Tensor& tensor) {
     const auto& shape = tensor->shape();
     // need to record the shape for all shape plans in the shape plan pool
-    // so we leverage _record_execute_tensor and do it lazily
+    // so we leverage _record_exec_tensor and do it lazily
+    // workaround: batched_isend_irecv_op需要保证其不会在concat算子之后
+    // 不然deduce shape plan时顺序错误会导致无法推导
     _record_exec_tensors.emplace_back(tensor);
+    if (is_batched_isend_irecv_op(tensor->producer()) && _record_exec_tensors.size() > 1) {
+      // HT_LOG_INFO << "record_exec_tensors: " << _record_exec_tensors;
+      for (size_t i = _record_exec_tensors.size() - 2; i >= 0; i--) {
+        if (is_concat_op(_record_exec_tensors[i]->producer())) {
+          _record_exec_tensors[i + 1] = _record_exec_tensors[i];
+        } else {
+          _record_exec_tensors[i + 1] = tensor;
+          break;
+        }
+      }
+    }
     if (!_shape_plan_pool.empty()) {
       auto& shape_plan = _shape_plan_pool.at(_active_shape_plan);
       auto it = shape_plan.find(tensor->id());
@@ -171,19 +188,21 @@ class ExecutableGraph : public Graph {
     }
   }
 
-  // 与RecordExecTensor功能相反
-  // 暂时用不到
-  /*
-  void EraseExecTensor(const Tensor& tensor) {
-    auto& shape_plan = _shape_plan_pool.at(_active_shape_plan);
-    const auto& shape = tensor->shape();
-    _erase_execute_tensor.emplace_back(tensor);
-    auto it = shape_plan.find(tensor->id());
-    HT_ASSERT(it != shape_plan.end())
-      << "Tensor " << tensor << " should exist in shape plan";
-    shape_plan.erase(it);
+  // 将op从exec graph中删除
+  // 1、将其从对应的subgraph中删除（如果存在）
+  // 2、将其的输出从record_exec_tensors中删除（如果存在）
+  void DeleteExecOp(Operator& op) {
+    DeleteOpFromSubGraph(op);
+    for (auto& output : op->outputs()) {
+      _record_exec_tensors.erase(
+        std::remove_if(_record_exec_tensors.begin(), _record_exec_tensors.end(),
+          [&output](const Tensor& tensor) {
+            return tensor->id() == output->id();
+          }),
+        _record_exec_tensors.end()
+      );
+    }
   }
-  */
 
   const HTShape& GetTensorShape(const Tensor& tensor) const {
     const auto& shape_plan = _shape_plan_pool.at(_active_shape_plan);
@@ -294,14 +313,13 @@ class ExecutableGraph : public Graph {
   std::unordered_map<DataType, std::shared_ptr<ParamBuffer>> _current_grad_buffer_map;
   std::unordered_map<DataType, std::shared_ptr<ParamBuffer>> _accumulate_grad_buffer_map;
   TensorList _leaf_symbolic_tensor_list;
-  Tensor2TensorMap _transfer_map; // origin param到transfer param的映射
-  Tensor2TensorMap _grad_map; // origin param到未substitue comm op前的grad的映射
-  Tensor2TensorMap _grad_grad_map; // 未substitue comm op前的grad到substitue comm op后的grad的映射
-  Tensor2TensorMap _reversed_grad_grad_map; // substitue comm op后的grad到未substitue comm op前的grad的映射
+  Tensor2TensorMap _transfer_map; // origin param到transfer param的映射（注意substitute comm op后会对其进行修正）
+  Tensor2TensorMap _grad_map; // origin param到grad的映射（注意substitute comm op后会对其进行修正）
   bool _use_current_grad_buffer{false};
   bool _use_origin_param_and_optimizer_buffer{false};
   bool _use_origin_param_and_optimizer_buckets{true};
   double _grad_scale; 
+  bool _is_transfer_param_hot_switch{false};
 
   // 记录上一个图的param切换完的event
   std::unordered_map<TensorId, std::unique_ptr<Event>> _switch_param_events;
@@ -313,6 +331,13 @@ class ExecutableGraph : public Graph {
   // 记录当前图的grad计算完的event
   // 即意味着可以开始切换grad了
   std::unordered_map<TensorId, std::unique_ptr<Event>> _run_grad_events; // 注意这里的TensorId是未substitue comm op后的grad
+
+  // 分别记录param op到两个bridge的subgraph的映射
+  std::unordered_map<OpId, std::shared_ptr<SubGraph>> _optimize_compute_bridge_subgraph_map;
+  std::unordered_map<OpId, std::shared_ptr<SubGraph>> _compute_optimize_bridge_subgraph_map;
+  // 排序后的
+  std::vector<std::pair<OpId, std::shared_ptr<SubGraph>>> _optimize_compute_bridge_subgraph_sorted;
+  std::vector<std::pair<OpId, std::shared_ptr<SubGraph>>> _compute_optimize_bridge_subgraph_sorted;
 
   // profile相关
   int32_t _straggler_flag;

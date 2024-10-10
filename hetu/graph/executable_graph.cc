@@ -18,53 +18,6 @@
 namespace hetu {
 namespace graph {
 
-// mempool debug use
-// see whether it can reuse
-static std::unordered_map<uint64_t, std::pair<size_t, Tensor>> malloc_outputs_map;
-
-static void checkOutputsMemory(const Operator& op, size_t micro_batch_id, const NDArrayList& inputs, const NDArrayList& outputs) {
-  auto local_device = hetu::impl::comm::GetLocalDevice();
-  for (size_t i = 0; i < op->num_outputs(); i++) {
-    const auto& output = outputs.at(i);
-    bool is_inplace = false;
-    for (size_t j = 0; j < op->num_inputs(); j++) {
-      const auto& input = inputs.at(i);
-      if (output->storage() == input->storage()) {
-        HT_LOG_DEBUG << local_device << ": micro batch " << micro_batch_id << " " << op->output(i)
-          << " is inplace (with " << op->input(j) << ")"
-          << ", ptr id = " << output->storage()->ptr_id();
-        is_inplace = true;
-        break;
-      }
-    }
-    if (is_inplace) {
-      continue;
-    }
-    if (output->storage()->is_new_malloc()) {
-      if (is_all_gather_op(op)) {
-        // workaround
-        // all_gather由于开启了共享的buffer不对其进行分析
-        continue;
-      }
-      HT_LOG_INFO << local_device << ": micro batch " << micro_batch_id << " " << op->output(i)
-        << " malloc new GPU memory with shape = " << output->shape()
-        << ", ptr id = " << output->storage()->ptr_id();
-      malloc_outputs_map[output->storage()->ptr_id()] = std::make_pair(micro_batch_id, op->output(i));
-    } else {
-      auto it = malloc_outputs_map.find(output->storage()->split_from_ptr_id());
-      if (it == malloc_outputs_map.end()) {
-        HT_LOG_DEBUG << local_device << ": " << op->output(i) << " is not reused from any op outputs"
-          << ", whose shape = " << output->shape() << " and ptr id = " << output->storage()->ptr_id();
-        continue;
-      }
-      HT_LOG_DEBUG << local_device << ": " << op->output(i)
-        << " is reused from micro batch " << it->second.first << " " << it->second.second << " (ptr id = " << output->storage()->split_from_ptr_id() << ")"
-        << ", with shape = " << output->shape()
-        << ", ptr id = " << output->storage()->ptr_id();
-    }
-  }
-}
-
 static bool is_comm_without_reduce_op(const uint64_t comm_type) {
   return comm_type & (PEER_TO_PEER_SEND_OP | PEER_TO_PEER_RECV_OP |
                       ALL_TO_ALL_OP | ALL_GATHER_OP | BROADCAST_OP |
@@ -200,6 +153,32 @@ static Operator get_last_pipeline_stage_recv_op(const Operator& op) {
   HT_RUNTIME_ERROR << "Please ensure the op is already a fused pipeline recv op";
 }
 
+void ExecutableGraph::SortOptimizeComputeBridgeSubgraph() {
+  HT_ASSERT(_optimize_compute_bridge_subgraph_sorted.empty()) 
+    << "can only sort once";
+  for (const auto& entry : _optimize_compute_bridge_subgraph_map) {
+    _optimize_compute_bridge_subgraph_sorted.push_back(entry);
+  }
+  // workaround: 按照键（param_id）进行降序排序是实际layer的升序
+  std::sort(_optimize_compute_bridge_subgraph_sorted.begin(), _optimize_compute_bridge_subgraph_sorted.end(), 
+    [](const std::pair<OpId, std::shared_ptr<SubGraph>>& a, const std::pair<OpId, std::shared_ptr<SubGraph>>& b) {
+      return a.first > b.first;
+  });
+}
+
+void ExecutableGraph::SortComputeOptimizeBridgeSubgraph() {
+  HT_ASSERT(_compute_optimize_bridge_subgraph_sorted.empty()) 
+    << "can only sort once";
+  for (const auto& entry : _compute_optimize_bridge_subgraph_map) {
+    _compute_optimize_bridge_subgraph_sorted.push_back(entry);
+  }
+  // workaround: 按照键（param_id）进行升序排序是实际layer的降序
+  std::sort(_compute_optimize_bridge_subgraph_sorted.begin(), _compute_optimize_bridge_subgraph_sorted.end(), 
+    [](const std::pair<OpId, std::shared_ptr<SubGraph>>& a, const std::pair<OpId, std::shared_ptr<SubGraph>>& b) {
+      return a.first < b.first;
+  });
+}
+
 Operator& ExecutableGraph::MakeOpInner(std::shared_ptr<OpInterface> body,
                                        TensorList inputs, OpMeta op_meta) {
   _check_all_inputs_in_graph(inputs, op_meta.extra_deps);
@@ -222,6 +201,10 @@ Operator& ExecutableGraph::MakeOpInner(std::shared_ptr<OpInterface> body,
   }
   OpRef op_ref = MakeAndAddOp(std::move(body), std::move(inputs), std::move(op_meta));
   CUR_HETERO_ID = 0;
+  // record the subgraph
+  if (get_cur_subgraph_global_name() != "") {
+    AddOpToSubGraph(op_ref, get_cur_subgraph_global_name(), get_cur_subgraph_op_type());
+  }
   return op_ref;
 }
 
@@ -355,7 +338,7 @@ void ExecutableGraph::RegisterVariableDataInner(const Tensor& tensor,
 }
 
 void ExecutableGraph::AllocRuntimeBuffer(std::vector<RuntimeContext>& runtime_ctx_list) {
-  // some memory could alloc in advance
+  // some run-only-once (unrelated to pp) op could alloc and compute in advance
   // 1、fragile non-param varaible (alloc and compute)
   // 2、origin param (if needed, alloc on-the-fly and compute)
   // 3、transfer param (alloc and compute)
@@ -371,104 +354,132 @@ void ExecutableGraph::AllocRuntimeBuffer(std::vector<RuntimeContext>& runtime_ct
         << ", the size is " << it->second->size();
     }
   }
-  for (auto& op_ref : _execute_plan.local_placeholder_variable_ops) {
-    auto& op = op_ref.get();
-    if (is_variable_op(op)) {
-      // HT_LOG_INFO << "handling variable " << op << " allocation...";
-      // 是param且存在data transfer的情况需要单独处理
-      // 因为有可能是热切换过来的而不需要再计算
-      if (_parameter_ops.find(op->id()) != _parameter_ops.end()
-          && !_transfer_map.empty()) {
-        auto it = _transfer_map.find(op->output(0)->id());
-        HT_ASSERT(it != _transfer_map.end())
-          << "The transfer map does not consist of " << op->output(0) << " " << op->output(0)->dtype();
-        auto& transfer_param = it->second;
-        HT_ASSERT(!_transfer_param_buffer_map[transfer_param->dtype()]->IsEmpty())
-          << "The transfer param buffer of " << DataType2Str(transfer_param->dtype()) << " should not be empty";
-        auto transfer_param_data = NDArray(transfer_param->meta(),
-                                           _transfer_param_buffer_map[transfer_param->dtype()]->AsStorage(), 
-                                           _transfer_param_buffer_map[transfer_param->dtype()]->GetElementOffest(transfer_param));
-        // 添加runtime allocation
-        for (auto& runtime_ctx : runtime_ctx_list) {
-          runtime_ctx.add_runtime_allocation(transfer_param->id(), transfer_param_data);
-        }
-        // 热切换
-        if (_preserved_data.find(transfer_param->id()) != _preserved_data.end()) {
-          HT_LOG_DEBUG << hetu::impl::comm::GetLocalDevice() << ": exec transfer param " 
-            << transfer_param << " already has the data";
-        } 
-        // 冷启动
-        // 这种也包括了单策略一直训练
-        // 即每次不需要再单独分配transfer param buffer但需要重新进行transfer
-        else {
-          // COMPUTE_ONLY模式用于跑实验测latency
-          // 尽可能不进行多余的显存分配
-          if (_run_level != RunLevel::COMPUTE_ONLY) {
-            // alloc and compute origin param
-            auto origin_param = op->Compute({}, runtime_ctx_list[0]);
-            // compute transfer param
-            transfer_param->producer()->Compute(origin_param, runtime_ctx_list[0]);
-          }
-          // todo: for pp > 1, it is safer to 
-          // record the start and end event on all micro batches here
-          _preserved_data[transfer_param->id()] = transfer_param_data;
-          if (!op->output(0)->requires_grad()) {
-            auto data_it = _preserved_data.find(op->output(0)->id());
-            HT_ASSERT(data_it != _preserved_data.end());
-            _preserved_data.erase(data_it);
-          }
-        }
-        // 添加runtime skipped
-        for (auto& runtime_ctx : runtime_ctx_list) {
-          runtime_ctx.add_runtime_skipped(op->id());
-          runtime_ctx.add_runtime_skipped(transfer_param->producer()->id());
-        }
+  // optimize-compute bridge subgraph单独处理
+  for (const auto& [param_id, cur_subgraph] : _optimize_compute_bridge_subgraph_sorted) {
+    bool is_param_local = false, is_transfer_param_local = false;
+    auto& param_op = _op_indexing[param_id];
+    auto it = _transfer_map.find(param_op->output(0)->id());
+    HT_ASSERT(it != _transfer_map.end())
+      << "The transfer map does not consist of " << param_op->output(0) << " " << param_op->output(0)->dtype();
+    auto& transfer_param = it->second;
+    // param是local的
+    if (param_op->output(0)->placement() == local_device) {
+      is_param_local = true;
+    }
+    // transfer param是local的
+    if (transfer_param->placement() == local_device) {
+      is_transfer_param_local = true;
+      HT_ASSERT(!_transfer_param_buffer_map[transfer_param->dtype()]->IsEmpty())
+        << "The transfer param buffer of " << DataType2Str(transfer_param->dtype()) << " should not be empty";
+      auto transfer_param_data = NDArray(transfer_param->meta(),
+                                          _transfer_param_buffer_map[transfer_param->dtype()]->AsStorage(), 
+                                          _transfer_param_buffer_map[transfer_param->dtype()]->GetElementOffest(transfer_param));
+      // 添加runtime allocation
+      for (auto& runtime_ctx : runtime_ctx_list) {
+        runtime_ctx.add_runtime_allocation(transfer_param->id(), transfer_param_data);
       }
-      // 其余情况正常按variable去compute即可
-      // AllocVariableDataInner已经自动处理了_preserved_data已存在的情况
+      // 热切换
+      if (_is_transfer_param_hot_switch) {
+        HT_ASSERT(_preserved_data.find(transfer_param->id()) != _preserved_data.end())
+          << "exec transfer param " << transfer_param << " should already has the data if it is hot switched";
+      }
+      // 冷启动
       else {
-        // alloc阶段只分配param
-        if (_run_level == RunLevel::ALLOC) {
+        _preserved_data[transfer_param->id()] = transfer_param_data;
+      }
+    }
+    // 执行该subgraph
+    // COMPUTE_ONLY模式或者热切换了transfer param后不需要再执行
+    if (_run_level != RunLevel::COMPUTE_ONLY && !_is_transfer_param_hot_switch) {
+      Tensor2NDArrayMap tensor2data = {};
+      // param是local的则先执行
+      if (is_param_local) {
+        tensor2data[param_op->output(0)->id()] = param_op->Compute({}, runtime_ctx_list[0])[0];
+      }
+      // 实际执行
+      // HT_LOG_INFO << cur_subgraph->global_name() << " run begin";
+      cur_subgraph->run(tensor2data, runtime_ctx_list[0]);
+      // HT_LOG_INFO << cur_subgraph->global_name() << " run end";
+      // subgraph彻底为空
+      if (!is_param_local && !is_transfer_param_local) {
+        HT_ASSERT(cur_subgraph->ops_topo().empty())
+          << "optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should be empty";
+        /*
+        ncclGroupStart_safe();
+        ncclGroupEnd_safe();
+        */
+      }
+      // origin param是本地但是transfer param不是
+      else if (is_param_local && !is_transfer_param_local) {
+        HT_ASSERT(cur_subgraph->ops_topo().back().get()->num_outputs() == 0)
+          << "nonlocal transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have no output tensor";
+        HT_ASSERT(tensor2data.size() == 0)
+          << "nonlocal transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have no input or output NDarray after running";
+      }
+      // transfer param是本地的
+      else {
+        HT_ASSERT(cur_subgraph->ops_topo().back().get()->num_outputs() == 1)
+          << "local transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have only one output tensor";
+        HT_ASSERT(tensor2data.size() == 1 && tensor2data.find(transfer_param->id()) != tensor2data.end())
+          << "local transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have a single output NDarray after running";
+      }
+      // local param不需要grad时可以删除
+      if (is_param_local && !param_op->output(0)->requires_grad()) {
+        auto data_it = _preserved_data.find(param_op->output(0)->id());
+        HT_ASSERT(data_it != _preserved_data.end());
+        _preserved_data.erase(data_it);
+      }
+    }
+    // 最后集中添加runtime skipped
+    for (auto& runtime_ctx : runtime_ctx_list) {
+      runtime_ctx.add_runtime_skipped(param_op->id());
+      // 这里将subgraph的所有op标记为skip
+      for (auto& op_ref : cur_subgraph->ops_topo()) {
+        runtime_ctx.add_runtime_skipped(op_ref.get()->id());
+      }
+    }
+  }
+  // 其余var直接正常compute
+  for (const auto& op_ref : _execute_plan.local_placeholder_variable_ops) {
+    auto& op = op_ref.get();
+    if (is_variable_op(op) && _parameter_ops.find(op->id()) == _parameter_ops.end()) {
+      // alloc阶段只分配param
+      if (_run_level == RunLevel::ALLOC) {
+        continue;
+      }
+      // compute_only和grad阶段optimizer相关的variable不用跑
+      // 例如Adam的step、mean、variance
+      if (_run_level == RunLevel::COMPUTE_ONLY || _run_level == RunLevel::GRAD) {
+        if (op->output(0)->num_consumers() == 1 
+            && is_optimizer_update_op(op->output(0)->consumer(0))) {
           continue;
         }
-        // compute_only和grad阶段optimizer相关的variable不用跑
-        // 例如Adam的step、mean、variance
-        if (_run_level == RunLevel::COMPUTE_ONLY || _run_level == RunLevel::GRAD) {
-          if (op->output(0)->num_consumers() == 1 
-              && is_optimizer_update_op(op->output(0)->consumer(0))) {
-            continue;
-          }
-        }
-        op->Compute({}, runtime_ctx_list[0]);
-        // 添加runtime skipped
-        for (auto& runtime_ctx : runtime_ctx_list) {
-          runtime_ctx.add_runtime_skipped(op->id());
-        }
       }
-    // HT_LOG_INFO << "handling variable " << op << " allocation done";
+      op->Compute({}, runtime_ctx_list[0]);
+      // 添加runtime skipped
+      for (auto& runtime_ctx : runtime_ctx_list) {
+        runtime_ctx.add_runtime_skipped(op->id());
+      }
     }
-  } 
+  }
   // ---------- grad ----------
   if (_run_level == RunLevel::GRAD || _run_level == RunLevel::UPDATE) {
     if (_use_current_grad_buffer) {
-      for (auto it_ = _current_grad_buffer_map.begin();
-           it_ != _current_grad_buffer_map.end(); ++it_) {
-        if (!it_->second->IsEmpty() && !it_->second->IsAllocated()) {
+      for (auto it = _current_grad_buffer_map.begin();
+           it != _current_grad_buffer_map.end(); ++it) {
+        if (!it->second->IsEmpty() && !it->second->IsAllocated()) {
           // alloc current grad
-          it_->second->Alloc(Stream(local_device, kBlockingStream));
+          it->second->Alloc(Stream(local_device, kBlockingStream));
           HT_LOG_DEBUG << local_device << ": alloc current grad buffer "
-            << ", the size is " << it_->second->size();
+            << ", the size is " << it->second->size();
         }
-        for (const auto& current_grad : it_->second->tensor_list()) {
+        for (const auto& current_grad : it->second->tensor_list()) {
           auto current_grad_data = NDArray(current_grad->meta(),
-                                           it_->second->AsStorage(), 
-                                           it_->second->GetElementOffest(current_grad));
+                                           it->second->AsStorage(), 
+                                           it->second->GetElementOffest(current_grad));
           // 添加runtime allocation
           for (auto& runtime_ctx : runtime_ctx_list) {
-            auto it = _grad_grad_map.find(current_grad->id());
-            HT_ASSERT(it != _grad_grad_map.end())
-              << "cannot find the mapping of " << current_grad << " in the grad grad map";
-            runtime_ctx.add_runtime_allocation(it->second->id(), current_grad_data);
+            runtime_ctx.add_runtime_allocation(current_grad->id(), current_grad_data);
           }
           // 注意与param不同的是
           // 这里不能添加runtime skipped
@@ -583,6 +594,8 @@ MemoryPlan ExecutableGraph::GenerateMemoryPlan(size_t& memory_size, std::vector<
       OpList ops;
       for (auto [name, op] : subgraph->ops()) 
         ops.push_back(op);  
+      for (auto [name, op] : subgraph->bwd_ops()) 
+        ops.push_back(op); 
       for (auto [name, child] : subgraph->subgraphs()) {
         auto child_ops = get_all_ops(child);
         for (auto op : child_ops) 
@@ -591,7 +604,7 @@ MemoryPlan ExecutableGraph::GenerateMemoryPlan(size_t& memory_size, std::vector<
       return ops;
     };
     for (auto bname : block_name) {
-      if (subgraph->subgraph_type() == bname) {
+      if (subgraph->subgraph_type() == SubGraphType::MODULE && subgraph->module_type() == bname) {
         block_ops.push_back(get_all_ops(subgraph));
       }
     }
@@ -820,6 +833,8 @@ bool ExecutableGraph::Instantiate(const TensorList& fetches,
       // 1. remove unused comm ops
       if (comm_op_impl.get_comm_type(op, preferred_device) == UNUSED_OP) {
         HT_LOG_DEBUG << op << " is an unused comm op and will be removed";
+        // 将op从exec graph中删除
+        DeleteExecOp(op);
         // the former op of the unused comm op should have the same recompute setting
         op->input(0)->producer()->op_meta().set_multi_recompute(op->op_meta().multi_is_recompute);
         // should remove consumer of unused comm_op from end to begin
@@ -845,9 +860,11 @@ bool ExecutableGraph::Instantiate(const TensorList& fetches,
         // *目前只支持将不含partial的两个算子融合成一个BatchedIsendIrecv
         auto& input_comm_op_impl = dynamic_cast<CommOpImpl&>(input_op->body());
         if (is_comm_without_reduce_op(input_comm_op_impl.get_comm_type(input_op, preferred_device))
-             && is_comm_without_reduce_op(comm_op_impl.get_comm_type(op, preferred_device))) {
+            && is_comm_without_reduce_op(comm_op_impl.get_comm_type(op, preferred_device))) {
           HT_LOG_WARN << "Fuse " << input_op << " with type " << input_comm_op_impl.get_comm_type(input_op, preferred_device)
             << " and " << op << " with type " << comm_op_impl.get_comm_type(op, preferred_device);
+          // 将op从exec graph中删除
+          DeleteExecOp(input_op);
           Graph::ReplaceInput(op, 0, input_op->input(0));
           // input changes, update comm_op type
           comm_op_impl.get_comm_type(op, preferred_device);
@@ -866,6 +883,13 @@ bool ExecutableGraph::Instantiate(const TensorList& fetches,
             continue;
           }
           Tensor grad_scale = MakeDivByConstOp(grad, _num_micro_batches * dp, OpMeta().set_name(grad->name() + "_scale"));
+          auto cur_subgraph = GetSubGraph(grad->producer());
+          if (cur_subgraph != nullptr) {
+            AddOpToSubGraph(grad_scale->producer(), cur_subgraph->global_name(), SubGraphOpType::BACKWARD);
+          } else {
+            HT_LOG_WARN << "cannot find the subgraph of ultimate grad op " << grad->producer()
+              << ", though it is ok if we do not use memory plan"; 
+          }
           RecordExecTensor(grad_scale);
           auto& grad_scale_op = grad_scale->producer();
           grad_scale_op->MapToParallelDevices(op->placement_group_union());
@@ -908,20 +932,19 @@ bool ExecutableGraph::Instantiate(const TensorList& fetches,
       preferred_device_ = kCPU;
     else if (!op->placement_group_union().has(preferred_device_)) // for local compute: op->placement + tensor->placement
       continue;
-    Device placement =
-      is_device_to_host_op(op) ? Device(kCPU) : preferred_device_;
+    Device placement = is_device_to_host_op(op) ? Device(kCPU) : preferred_device_;
     StreamIndex stream_id = get_suggested_stream_index(op);
     HT_LOG_TRACE << "Instantiating op " << op << " (placement=" << placement
-                 << ", stream_index=" << stream_id << ")";
+      << ", stream_index=" << stream_id << ")";
     bool ok = op->Instantiate(placement, stream_id);
     if (!ok && !placement.is_cpu()) {
       HT_LOG_WARN << "Failed to instantiate op " << op << " on " << placement
-                  << ". Will try to instantiate it on the host device.";
+        << ". Will try to instantiate it on the host device.";
       placement = Device(kCPU);
       ok = op->Instantiate(placement, stream_id);
     }
     HT_VALUE_ERROR_IF(!ok) << "Failed to instantiate op " << op << " on "
-                           << placement;
+      << placement;
 
     // add transfer ops
     for (size_t i = 0; i < op->num_inputs(); i++) {
@@ -949,6 +972,13 @@ bool ExecutableGraph::Instantiate(const TensorList& fetches,
           // TODO: support cuda memcpy across processes
           HT_NOT_IMPLEMENTED << "We should use NCCL for P2P communication: " << op->type();
           __builtin_unreachable();
+        }
+        auto cur_subgraph = GetSubGraph(input->producer());
+        if (cur_subgraph != nullptr) {
+          AddOpToSubGraph(transferred_input->producer(), cur_subgraph->global_name(), GetSubGraphOpType(input->producer()));
+        } else {
+          HT_LOG_WARN << "cannot find the subgraph of device transfer input op " << input->producer()
+            << ", though it is ok if we do not use memory plan"; 
         }
         RecordExecTensor(transferred_input);
         auto& transfer_op = transferred_input->producer();
@@ -991,6 +1021,13 @@ void ExecutableGraph::InsertContiguousOp(const OpRefList& topo_order) {
             HT_LOG_TRACE << "Insert contiguous op for " << input
               << ", shape is " << input->shape()
               << ", stride is " << input->stride();
+            auto cur_subgraph = GetSubGraph(input->producer());
+            if (cur_subgraph != nullptr) {
+              AddOpToSubGraph(contig_input->producer(), cur_subgraph->global_name(), GetSubGraphOpType(input->producer()));
+            } else {
+              HT_LOG_WARN << "cannot find the subgraph of contiguous input op " << input->producer()
+                << ", though it is ok if we do not use memory plan"; 
+            }
             RecordExecTensor(contig_input);
             auto& contig_op = contig_input->producer();
             contig_op->MapToParallelDevices(input_op->placement_group_union());
@@ -1005,13 +1042,25 @@ void ExecutableGraph::InsertContiguousOp(const OpRefList& topo_order) {
 
 void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
   auto& local_device = hetu::impl::comm::GetLocalDevice();
-  std::unordered_map< OpId, OpId > old_comm_to_new;
+  // std::unordered_map<OpId, OpId> old_comm_to_new;
   for (auto& op_ref : topo_order) {
     auto& op = op_ref.get();
     // each device only need to substitute local comm_ops
     if (is_comm_op(op) && op->placement_group_union().has(local_device)) {
       HT_LOG_DEBUG << local_device << "==============> substitute comm_op begin: " << op << "...";
       auto& comm_op = op;
+      // 获取其所在的subgraph使得后续替换的op都出现在同样的subgraph中
+      // 有如下几种可能
+      // 1、在optimize-compute bridge或compute-oprimize bridge的subgraph中
+      // 2、在pipeline layer的subgraph中
+      // 3、在正常的module中的subgraph中
+      auto comm_subgraph = GetSubGraph(comm_op);
+      HT_ASSERT(comm_subgraph != nullptr)
+        << "cannot find the subgraph of the comm op to be substituted " << comm_op; 
+      HT_ASSERT(get_cur_subgraph_global_name() == "" && get_cur_subgraph_op_type() == SubGraphOpType::UNKNOWN)
+        << "please ensure the ctx is empty before substituting " << comm_op;
+      push_subgraph_op_type_ctx(GetSubGraphOpType(comm_op));
+      push_subgraph_ctx(comm_subgraph->global_name());
       auto& comm_op_impl = dynamic_cast<CommOpImpl&>(comm_op->body());
       const auto& info = comm_op_impl.get_comm_info(comm_op, local_device);
       // HT_LOG_WARN << comm_op << ": " << info;
@@ -1191,7 +1240,7 @@ void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
           << "wrong src and dst group relationship!";
         DeviceGroup comm_group = comm_op_impl.get_devices_by_dim(comm_op, -2);
         int32_t scatter_dim = info.dst_ds.get_split_dim(info.src_ds);
-        Tensor reduce_scatter_output =  MakeReduceScatterOp(
+        Tensor reduce_scatter_output = MakeReduceScatterOp(
           result, comm_group, comm_op_impl.reduction_type(), 
           scatter_dim, false,
           OpMeta().set_is_deduce_states(false)
@@ -1287,7 +1336,10 @@ void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
           }
         }
       }
-      old_comm_to_new[comm_op->id()] = result->producer()->id();
+      // old_comm_to_new[comm_op->id()] = result->producer()->id();
+      pop_subgraph_ctx();
+      pop_subgraph_op_type_ctx();
+      DeleteExecOp(comm_op);
       HT_LOG_DEBUG << local_device << "==============> substitute comm_op end: " << op << "...";
     }
   }
@@ -1481,8 +1533,7 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
       continue;
     }
     if (_run_level == RunLevel::COMPUTE_ONLY
-        && ((is_grad_reduce_op(op) && is_optimizer_update_op(op->output(0)->consumer(0)))
-            || (is_grad_reduce_op(op) && is_grad_reduce_op(op->output(0)->consumer(0)) && is_optimizer_update_op(op->output(0)->consumer(0)->output(0)->consumer(0))))) {
+        && (GetSubGraph(op) != nullptr && GetSubGraphOpType(op) == SubGraphOpType::UPDATE)) {
       continue;
     }
     if (is_optimizer_update_op(op)) {
@@ -1500,16 +1551,12 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
         }
         // 不使用current_grad_buffer的话需要在这里直接将grad加到accumulate_grad_buffer上
         else {
-          auto it = _reversed_grad_grad_map.find(grad->id());
-          HT_ASSERT(it != _reversed_grad_grad_map.end())
-            << "cannot find the mapping of " << grad << " in the reversed grad grad map";
-          auto& grad_in_buffer = it->second;
           HT_ASSERT(tensor2data.find(grad->id()) != tensor2data.end());
           auto current_grad_data = tensor2data[grad->id()];
           HT_ASSERT(_accumulate_grad_buffer_map.find(grad->dtype()) != _accumulate_grad_buffer_map.end());
           auto accumulate_grad_data = NDArray(grad->meta(), 
                                               _accumulate_grad_buffer_map[grad->dtype()]->AsStorage(), 
-                                              _accumulate_grad_buffer_map[grad->dtype()]->GetElementOffest(grad_in_buffer));
+                                              _accumulate_grad_buffer_map[grad->dtype()]->GetElementOffest(grad));
           auto grad_stream = grad_op->instantiation_ctx().stream(); 
           if (_grad_scale != 1) {
             NDArray::mul(current_grad_data,
@@ -1519,7 +1566,7 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
           }
           // 如果有一些累计梯度是switch过来的
           // 那么我们这里进行实际的sync
-          auto event_it = _switch_grad_events.find(grad_in_buffer->id());
+          auto event_it = _switch_grad_events.find(grad->id());
           if (event_it != _switch_grad_events.end()) {
             event_it->second->Block(grad_stream);
           } 
@@ -1542,15 +1589,11 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
         if (_accumulate_grad_buffer_map[op->input(1)->dtype()]->IsAllocated()) {
           auto& grad = op->input(1);
           auto& grad_op = grad->producer();
-          auto it = _reversed_grad_grad_map.find(grad->id());
-          HT_ASSERT(it != _reversed_grad_grad_map.end())
-            << "cannot find the mapping of " << grad << " in the reversed grad grad map";
-          auto& grad_in_buffer = it->second;
           HT_ASSERT(tensor2data.find(grad->id()) != tensor2data.end());
           auto current_grad_data = tensor2data[grad->id()];
           auto accumulate_grad_data = NDArray(grad->meta(), 
                                               _accumulate_grad_buffer_map[grad->dtype()]->AsStorage(), 
-                                              _accumulate_grad_buffer_map[grad->dtype()]->GetElementOffest(grad_in_buffer));
+                                              _accumulate_grad_buffer_map[grad->dtype()]->GetElementOffest(grad));
           auto grad_stream = Stream(grad_op->placement(),
                                     grad_op->instantiation_ctx().stream_index);
           if (_grad_scale != 1) {
@@ -1561,7 +1604,7 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
           }
           // 如果有一些累计梯度是switch过来的
           // 那么我们这里进行实际的sync
-          auto event_it = _switch_grad_events.find(grad_in_buffer->id());
+          auto event_it = _switch_grad_events.find(grad->id());
           if (event_it != _switch_grad_events.end()) {
             event_it->second->Block(grad_stream);
           } 
@@ -1683,13 +1726,8 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
       const auto& output = op->output(i);
       if (accumulated_tensor.find(output->id()) != accumulated_tensor.end()) {
         if (grad_accumulation.find(output->id()) == grad_accumulation.end()) {
-          // grad_accumulation[output->id()] = output_vals[i];
           grad_accumulation[output->id()] = NDArray::zeros_like(output_vals[i]);
         } 
-        // else {
-          // NDArray::add(grad_accumulation[output->id()], output_vals[i], 
-                      //  op->instantiation_ctx().stream_index, grad_accumulation[output->id()]); // inplace
-        // }
         NDArray::add(grad_accumulation[output->id()], output_vals[i], op->instantiation_ctx().stream_index, grad_accumulation[output->id()]);         
         if (grad_accumulation_finished) {
           tensor2data[output->id()] = grad_accumulation[output->id()];
@@ -1950,13 +1988,13 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
     auto& runtime_ctx = runtime_ctx_list[micro_batch_id];
     // set arithmetic shape
     SetShapePlan(_active_shape_plan_list[micro_batch_id]);
+    // some tensor (inserted just now) may need to infer shape again
+    UpdateExecShapePlan(runtime_ctx);
     // set symbolic shape
     for (auto& tensor: _leaf_symbolic_tensor_list) {
       // HT_LOG_INFO << local_device << ": leaf symbolic tensor " << tensor; 
       tensor->set_symbolic_shape(GetTensorShape(tensor));
     }
-    // some tensor (inserted just now) may need to infer shape again
-    UpdateExecShapePlan(runtime_ctx);
     // micro batch i>0 reuse: 
     // 0. shared weight which was recved in micro batch 0
     // 1. f32 -> fp16, bf16 weight which was transfered in micro batch 0
@@ -2204,10 +2242,11 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
 
 NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches, 
                                  const FeedDict& feed_dict, const int num_micro_batches,
-                                 const int cur_strategy_id, RunLevel run_level, const double grad_scale) {
+                                 RunLevel run_level, const double grad_scale) {
   
   GetExecEnvs();
   TIK(prepare_run);
+  _run_level = run_level;
   _grad_scale = grad_scale;
   auto& local_device = hetu::impl::comm::GetLocalDevice();
   HT_LOG_DEBUG << local_device << ": exec graph run begin .............";
@@ -2309,6 +2348,7 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
     // std::tie(fw_topo, bw_topo) = disentangle_forward_and_backward_ops(updated_topo);
 
     // judge whether is shared weight p2p in fw/bw.
+    // TODO: leverage subgraph, refactor all these
     auto is_fw_share_weight_p2p_send = [&](const OpRef& op_ref) -> bool {
       // HT_LOG_WARN << "call is_fw_share_weight_p2p_send";
       if (is_pipeline_stage_send_op(op_ref.get())) {
@@ -2432,12 +2472,7 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
           } else {
             if (is_placeholder_op(op_ref) || is_variable_op(op_ref)) {
               _placeholder_variable_ops.push_back(op_ref);
-            } else if (is_grad_reduce_op(op_ref)
-                       && is_grad_reduce_op(op_ref.get()->output(0)->consumer(0))
-                       && is_optimizer_update_op(op_ref.get()->output(0)->consumer(0)->output(0)->consumer(0))) {
-              update_op_list.push_back(op_ref);
-            } else if (is_grad_reduce_op(op_ref) 
-                       && is_optimizer_update_op(op_ref.get()->output(0)->consumer(0))) {
+            } else if (GetSubGraph(op_ref) != nullptr && GetSubGraphOpType(op_ref) == SubGraphOpType::UPDATE) {
               update_op_list.push_back(op_ref);
             } else if (is_optimizer_update_op(op_ref)) {
               optimizer_op_list.push_back(op_ref);
@@ -2479,34 +2514,121 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
     }
     HT_LOG_DEBUG << local_device << ": [Execution Plan] get leaf symbolic tensor list end...";
 
-    HT_LOG_DEBUG << local_device << ": [Execution Plan] get grad to grad map begin...";
-    for (auto& op_ref : local_bw_topo) {
-      if (is_optimizer_update_op(op_ref)) {
-        auto& param = op_ref.get()->input(0);
-        auto& grad = op_ref.get()->input(1);
-        auto it = _grad_map.find(param->id());
-        HT_ASSERT(it != _grad_map.end())
+    HT_LOG_DEBUG << local_device << ": [Execution Plan] get transfer & grad map and running-once tensor & op begin...";
+    // some special ops only run at the begining
+    // some special ops shouldn't be updated before grad accumulation finished
+    TensorIdSet dtype_transfer_tensor;
+    TensorIdSet shared_weight_tensor;
+    TensorIdSet accumulated_tensor;
+    OpIdSet shared_weight_p2p;
+    OpIdSet shared_weight_grad_p2p;
+    OpIdSet accumulated_ops;
+    // 修正op映射后的buffer
+    std::unordered_map<DataType, std::shared_ptr<ParamBuffer>> substitute_transfer_param_buffer_map;
+    std::unordered_map<DataType, std::shared_ptr<ParamBuffer>> substitute_current_grad_buffer_map;
+    std::unordered_map<DataType, std::shared_ptr<ParamBuffer>> substitute_accumulate_grad_buffer_map;
+    for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
+      DataType dtype = static_cast<DataType>(i);
+      substitute_transfer_param_buffer_map[dtype] = std::make_shared<ParamBuffer>("substitute_transfer_param_buffer_" + DataType2Str(dtype));
+      substitute_current_grad_buffer_map[dtype] = std::make_shared<ParamBuffer>("substitute_current_grad_buffer_" + DataType2Str(dtype));
+      substitute_accumulate_grad_buffer_map[dtype] = std::make_shared<ParamBuffer>("substitute_accumulate_grad_buffer_" + DataType2Str(dtype));
+    }  
+    for (auto& op_ref : bw_topo) {
+      if (!is_optimizer_update_op(op_ref)) {
+        continue;
+      }
+      accumulated_ops.insert(op_ref.get()->id()); // update op本身也是只运行一次的
+      auto& param = op_ref.get()->input(0);
+      HT_ASSERT(_optimize_compute_bridge_subgraph_map.find(param->producer()->id()) != _optimize_compute_bridge_subgraph_map.end()
+                && _compute_optimize_bridge_subgraph_map.find(param->producer()->id()) != _compute_optimize_bridge_subgraph_map.end())
+        << "cannot find the corresponding optimize-compute or compute-optimize bridge subgraph for " << param;
+      _optimize_compute_bridge_subgraph_map[param->producer()->id()]->topo_sort();
+      _compute_optimize_bridge_subgraph_map[param->producer()->id()]->topo_sort();
+      const auto& transfer_topo = _optimize_compute_bridge_subgraph_map[param->producer()->id()]->ops_topo();
+      const auto& update_topo = _compute_optimize_bridge_subgraph_map[param->producer()->id()]->update_ops_topo();
+      HT_LOG_INFO << param << " corresponding transfer topo is " << transfer_topo;
+      HT_LOG_INFO << param << " corresponding update topo is " << update_topo;
+      // 有该param对应的local transfer param
+      if (transfer_topo.size() >= 1 && transfer_topo.back().get()->num_outputs() >= 1) {
+        auto& final_transfer = transfer_topo.back().get()->output(0);
+        for (auto& transfer_op_ref : transfer_topo) {
+          dtype_transfer_tensor.insert(transfer_op_ref.get()->output(0)->id());
+        }
+        auto transfer_it = _transfer_map.find(param->id());
+        HT_ASSERT(transfer_it != _transfer_map.end())
+          << "cannot find the mapping of " << param << " in the transfer map";
+        auto& transfer_in_buffer = transfer_it->second;
+        HT_ASSERT(transfer_in_buffer->meta() == final_transfer->meta())
+          << "the meta of the transfer before/after substitute comm op should be equal"
+          << ", but meta of transfer in buffer is " << transfer_in_buffer->meta()
+          << ", and meta of transfer is " << final_transfer->meta();
+        HT_ASSERT(transfer_in_buffer->cur_ds_union().check_equal(final_transfer->cur_ds_union()))
+          << "the ds union of the transfer before/after substitute comm op should be equal";
+        HT_ASSERT(transfer_in_buffer->placement_group_union().check_equal(final_transfer->placement_group_union()))
+          << "the placement group union of the transfer before/after substitute comm op should be equal"
+          << ", but found " << transfer_in_buffer->placement_group_union() << " vs " << final_transfer->placement_group_union();
+        substitute_transfer_param_buffer_map[final_transfer->dtype()]->AddTensor(final_transfer);
+        _transfer_map[param->id()] = final_transfer;  
+      }
+      // 有该param对应的local grad
+      if (update_topo.size() >= 1 && update_topo.back().get()->num_outputs() >= 1) {
+        auto& final_grad = update_topo.back().get()->output(0);
+        HT_ASSERT(final_grad->id() == op_ref.get()->input(1)->id())
+          << "final grad in compute-optimize bridge subgraph should be the same as the update op input 1";
+        for (auto& update_op_ref : update_topo) {
+          accumulated_ops.insert(update_op_ref.get()->id());
+          // 如果update topo中某个input不是该topo中任何一个的output那么就是需要累积梯度的tensor
+          for (auto& input : update_op_ref.get()->inputs()) {
+            bool is_accumulated_tensor = true;
+            for (auto& check_op_ref : update_topo) {
+              // 再往后的op肯定不会
+              if (check_op_ref.get()->id() == update_op_ref.get()->id()) {
+                break;
+              }
+              for (auto& check_output : check_op_ref.get()->outputs()) {
+                if (input->id() == check_output->id()) {
+                  is_accumulated_tensor = false;
+                  break;
+                }
+              }
+              if (is_accumulated_tensor == false) {
+                break;
+              }
+            }
+            if (is_accumulated_tensor) {
+              accumulated_tensor.insert(input->id());
+            }
+          }
+        }        
+        auto grad_it = _grad_map.find(param->id());
+        HT_ASSERT(grad_it != _grad_map.end())
           << "cannot find the mapping of " << param << " in the grad map";
-        auto& grad_in_buffer = it->second;
-        HT_ASSERT(grad_in_buffer->meta() == grad->meta())
+        auto& grad_in_buffer = grad_it->second;
+        HT_ASSERT(grad_in_buffer->meta() == final_grad->meta())
           << "the meta of the grad before/after substitute comm op should be equal"
           << ", but meta of grad in buffer is " << grad_in_buffer->meta()
-          << ", and meta of grad is " << grad->meta();
-        HT_ASSERT(grad_in_buffer->cur_ds_union().check_equal(grad->cur_ds_union()))
-          << "the distributed states of the grad before/after substitute comm op should be equal";
-        HT_ASSERT(grad_in_buffer->producer()->device_group_union().check_equal(grad->placement_group_union()))
-          << "the device group of the grad before/after substitute comm op should be equal";
-        _grad_grad_map[grad_in_buffer->id()] = grad;
-        _reversed_grad_grad_map[grad->id()] = grad_in_buffer;
+          << ", and meta of grad is " << final_grad->meta();
+        HT_ASSERT(grad_in_buffer->cur_ds_union().check_equal(final_grad->cur_ds_union()))
+          << "the ds union of the grad before/after substitute comm op should be equal";
+        HT_ASSERT(grad_in_buffer->placement_group_union().check_equal(final_grad->placement_group_union()))
+          << "the placement group union of the grad before/after substitute comm op should be equal";
+        substitute_current_grad_buffer_map[final_grad->dtype()]->AddTensor(final_grad);
+        substitute_accumulate_grad_buffer_map[final_grad->dtype()]->AddTensor(final_grad);
+        _grad_map[param->id()] = final_grad;   
       }
     }
-    HT_LOG_DEBUG << local_device << ": [Execution Plan] get grad to grad map end...";
-
-    HT_LOG_DEBUG << local_device << ": [Execution Plan] get shared weights & dtype transfered weights begin...";
-    // todo: get all shared variable op related (send, recv), cached in first micro batch, and used in later micro batches 
-    TensorIdSet shared_weight_tensor;
-    OpIdSet shared_weight_p2p;
-    TensorIdSet dtype_transfer_tensor;
+    // 这里直接将substitute后的param buffer替换掉define graph中生成的
+    for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
+      DataType dtype = static_cast<DataType>(i);
+      HT_ASSERT(_transfer_param_buffer_map[dtype]->size() == substitute_transfer_param_buffer_map[dtype]->size()
+                && _current_grad_buffer_map[dtype]->size() == substitute_current_grad_buffer_map[dtype]->size()
+                && _accumulate_grad_buffer_map[dtype]->size() == substitute_accumulate_grad_buffer_map[dtype]->size())
+        << "buffer size should be equal";
+      _transfer_param_buffer_map[dtype] = substitute_transfer_param_buffer_map[dtype];
+      _current_grad_buffer_map[dtype] = substitute_current_grad_buffer_map[dtype];
+      _accumulate_grad_buffer_map[dtype] = substitute_accumulate_grad_buffer_map[dtype];
+    }  
+    // dtype_transfer_tensor还有别的（非param的）需要再插入一轮
     // (group1) variable op -> send -> (group2) recv -> other ops
     for (auto& op_ref : local_fw_topo) {
       if (is_fw_share_weight_p2p_send(op_ref)) {
@@ -2520,7 +2642,6 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
         dtype_transfer_tensor.insert(op_ref.get()->output(0)->id());
       }
     }
-    OpIdSet shared_weight_grad_p2p;
     for (auto& op_ref : local_bw_topo) {
       if (is_bw_share_weight_grad_p2p_send(op_ref) || is_bw_share_weight_grad_p2p_recv(op_ref)) {
         shared_weight_grad_p2p.insert(op_ref.get()->id());
@@ -2529,12 +2650,10 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
         dtype_transfer_tensor.insert(op_ref.get()->output(0)->id());
       }
     }
-    HT_LOG_DEBUG << local_device << ": [Execution Plan] get shared weights & dtype transfered weights end...";
+    HT_LOG_DEBUG << local_device << ": [Execution Plan] get transfer & grad map and running-once tensor & op end...";
 
+    /*
     HT_LOG_DEBUG << local_device << ": [Execution Plan] get accumulated tensor & ops begin...";
-    // some special ops shouldn't be updated before grad accumulation finished
-    TensorIdSet accumulated_tensor;
-    OpDeque accumulated_ops_deque;
     for (auto& op_ref : local_bw_topo) {
       auto& op = op_ref.get();
       // HT_LOG_INFO << "handling " << op;
@@ -2571,10 +2690,7 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
           }
           // share weight with dp
           if (is_grad_reduce_op(grad_op) && is_sum_op(grad_op->input(0)->producer())) {
-            /*
-            HT_LOG_INFO << "share weight with dp, need to first sum "
-              << grad_op->input(0)->producer()->inputs() << " and then reduce";
-            */
+            // HT_LOG_INFO << "share weight with dp, need to first sum " << grad_op->input(0)->producer()->inputs() << " and then reduce";
             for (auto& sum_input : grad_op->input(0)->producer()->inputs()) {
               if (is_fused_pipeline_stage_recv_op(sum_input->producer())) {
                 accumulated_ops_deque.emplace_back(get_last_pipeline_stage_recv_op(sum_input->producer()));
@@ -2674,6 +2790,8 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
     }
     // HT_LOG_INFO << local_device << ": accumulated ops: " << accumulated_ops << "\nlocal_bw_topo: " << local_bw_topo;
     HT_LOG_DEBUG << local_device << ": [Execution Plan] get accumulated tensor & ops end...";
+    */
+
     // update & cached execute plan 
     _execute_plan.update(local_placeholder_variable_ops, local_fw_topo, local_bw_topo, local_topo, dtype_transfer_tensor,
                          shared_weight_tensor, shared_weight_p2p, shared_weight_grad_p2p, accumulated_tensor, accumulated_ops);
@@ -2725,6 +2843,9 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
   }
   TOK(crucial_run);
   HT_LOG_DEBUG << local_device << ": crucial run time = " << COST_MSEC(crucial_run) << " ms";
+  if (_run_level == RunLevel::TOPO) {
+    return results;
+  }
   
   // get all micro batches memory consumption
   if (_memory_profile_level == MEMORY_PROFILE_LEVEL::MICRO_BATCH && _memory_log_file_path != "") {

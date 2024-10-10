@@ -1,8 +1,8 @@
 NUM_LAYERS=${1:-32}
-HIDDEN_SIZE=${2:-4096}
-# HIDDEN_SIZE=${2:-256}
-FFN_HIDDEN_SIZE=${3:-11008}
-# FFN_HIDDEN_SIZE=${3:-2752}
+# HIDDEN_SIZE=${2:-4096}
+HIDDEN_SIZE=${2:-256}
+# FFN_HIDDEN_SIZE=${3:-11008}
+FFN_HIDDEN_SIZE=${3:-2752}
 NUM_HEADS=${4:-32}
 GLOBAL_BATCH_SIZE=${5:-128}
 MAX_SEQ_LEN=${6:-8192}
@@ -13,8 +13,13 @@ SERVER_PORT=${8:-"23333"}
 HOST_FILE_PATH=${9:-"./scripts/host.yaml"}
 ENV_FILE_PATH=${10:-"./scripts/env_A100.sh"}
 
-CASE=1
-if [[ ${CASE} -eq 1 ]]; then
+CASE=0
+if [[ ${CASE} -eq 0 ]]; then
+	# test
+	NUM_GPUS=2
+	MULTI_TP_PP_LIST="[[(1, 1), (1, 1)], ]"
+	BATCHING_METHOD=0
+elif [[ ${CASE} -eq 1 ]]; then
 	# homo + greedy packing with static shape
 	NUM_GPUS=16
 	MULTI_TP_PP_LIST="[[(4, 2), (4, 2)], ]"

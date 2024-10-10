@@ -183,8 +183,9 @@ def pretrain(args):
                 [loss, train_op], 
                 feed_dict=feed_dict, 
                 num_micro_batches=num_micro_batches, 
-                cur_strategy_id=strategy_id,
-                run_level = ht.run_level("compute_only")
+                compute_strategy_id=strategy_id,
+                optimize_strategy_id=strategy_id,
+                run_level = ht.run_level("update")
             )
         except RuntimeError as e:
             print(e)

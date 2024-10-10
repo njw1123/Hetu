@@ -22,6 +22,7 @@
 #include <nccl.h>
 #include <iostream>
 #include <fstream>
+#include <numeric> // for std::gcd
 
 namespace hetu {
 namespace graph {
@@ -421,6 +422,7 @@ void ParamSlice::ParamSliceComm(Device2DTListPairMap& send_mapping,
           Graph::ReplaceInput(consumer, j, new_tensor);
         }
       }
+      dynamic_cast<ExecutableGraph&>(old_tensor->graph()).DeleteExecOp(old_tensor->producer());
       HT_LOG_DEBUG_IF(needed_device == hetu::impl::comm::GetLocalDevice())
         << needed_device << ": can reuse the " << name()
         << " param slice instance owned by itself";
@@ -582,7 +584,7 @@ void SwitchExecGraph::CreateParamBlock(ParamBlock& block,
   const auto& block_shape = block.BlockShape();
   if (dim == block_shape.size()) {
     block.GetParamSlices().emplace_back(std::make_shared<ParamSlice>(block_name,
-                                                                     block.SliceShape(),
+                                                                     block.SySliceShape(),
                                                                      slice_num, 
                                                                      this));
     return;
@@ -597,7 +599,7 @@ void SwitchExecGraph::CreateParamBlock(ParamBlock& block,
 // 将ParamBlock划分成OwnedParamSlice（抽象）
 // 切分param成ParamSliceInstance（实际的tensor）
 void SwitchExecGraph::MakeAllParamSlices(const Tensor& param, ParamBlock& block, 
-                                         const Device& device, const DeviceGroup& group,
+                                         const Device& device, const DeviceGroupUnion& pg_union,
                                          std::vector<int32_t>& slice_num, std::vector<int32_t>& slice_relative_num,
                                          const std::unordered_map<int32_t, int32_t>& state,
                                          const std::vector<int32_t>& multiple, int32_t dim,
@@ -619,7 +621,7 @@ void SwitchExecGraph::MakeAllParamSlices(const Tensor& param, ParamBlock& block,
     auto& split_op = split_output->producer();
     // 其他device上生成的不需要map placement_group和placement
     if (hetu::impl::comm::GetLocalDevice() == device) { 
-      split_op->MapToParallelDevices({{group}});
+      split_op->MapToParallelDevices(pg_union);
       split_op->Instantiate(device, comp_stream_idx);
       dynamic_cast<ExecutableGraph&>(split_op->graph()).RecordExecTensor(split_output);
     }
@@ -628,6 +630,7 @@ void SwitchExecGraph::MakeAllParamSlices(const Tensor& param, ParamBlock& block,
     }
     // dup会导致一个param_slice对应多个slice_instance
     // 这也是这个优化问题之所以这么复杂的原因
+    // HT_LOG_INFO << split_output << " shape is " << get_HTShape_from_SyShape(split_output->symbolic_shape());
     param_slice->AddOwnedSliceInst(device, std::move(split_output));
     return;
   } 
@@ -644,7 +647,7 @@ void SwitchExecGraph::MakeAllParamSlices(const Tensor& param, ParamBlock& block,
       for (int32_t k = 0; k < uncontiguous_slice_multiple; k++) {
         slice_num[dim] = basic_slice_num + i * uncontiguous_slice_multiple + k;
         slice_relative_num[dim] = j * uncontiguous_slice_multiple + k;
-        MakeAllParamSlices(param, block, device, group, slice_num, slice_relative_num, state, multiple, dim + 1, 
+        MakeAllParamSlices(param, block, device, pg_union, slice_num, slice_relative_num, state, multiple, dim + 1, 
                            is_uncontiguous, uncontiguous_ordinal, uncontiguous_multiple, uncontiguous_slice_multiple, comp_stream_idx);
       }
     }   
@@ -654,7 +657,7 @@ void SwitchExecGraph::MakeAllParamSlices(const Tensor& param, ParamBlock& block,
   for (int32_t i = 0; i < multiple[dim]; ++i) {
     slice_num[dim] = basic_slice_num + i;
     slice_relative_num[dim] = i;
-    MakeAllParamSlices(param, block, device, group, slice_num, slice_relative_num, state, multiple, dim + 1,
+    MakeAllParamSlices(param, block, device, pg_union, slice_num, slice_relative_num, state, multiple, dim + 1,
                        is_uncontiguous, uncontiguous_ordinal, uncontiguous_multiple, uncontiguous_slice_multiple, comp_stream_idx);
   }                            
 }
@@ -663,7 +666,7 @@ void SwitchExecGraph::MakeAllParamSlices(const Tensor& param, ParamBlock& block,
 // 将ParamBlock划分成NeededParamSlice（抽象）
 // 合并ParamSliceInstance成param（实际的tensor）
 Tensor SwitchExecGraph::MergeAllParamSlices(const Tensor& param, ParamBlock& block, 
-                                    const Device& device, const DeviceGroup& group,
+                                    const Device& device, const DeviceGroupUnion& pg_union,
                                     std::vector<int32_t>& slice_num, std::vector<int32_t>& slice_relative_num,
                                     const std::unordered_map<int32_t, int32_t>& state,
                                     const std::vector<int32_t>& multiple, int32_t dim,
@@ -672,13 +675,13 @@ Tensor SwitchExecGraph::MergeAllParamSlices(const Tensor& param, ParamBlock& blo
                                     const StreamIndex comp_stream_idx) {
   if (dim == multiple.size()) {
     auto& param_slice = block.GetParamSlice(slice_num);
-    const auto& owned_slice_instance = param_slice->OwnedSliceInst(0);
+    const auto& sy_slice_shape = block.SySliceShape();
+    const auto slice_shape = get_HTShape_from_SyShape(sy_slice_shape);
+    auto base_meta = param_slice->OwnedSliceInst(0)->meta();
     // 之后会被替换成BatchedISendIRecvOp算子
     // Question: MakePlaceholderOp的各个参数是否都有必要
-    auto needed_slice_instance = MakePlaceholderOp(owned_slice_instance->meta());
-    if (owned_slice_instance->symbolic()) {
-      needed_slice_instance->copy_symbolic_shape(owned_slice_instance->symbolic_shape());
-    }
+    auto needed_slice_instance = MakePlaceholderOp(base_meta.set_shape(slice_shape));
+    needed_slice_instance->copy_symbolic_shape(sy_slice_shape);
     param_slice->AddNeededSliceInst(device, needed_slice_instance);
     return needed_slice_instance;
   } 
@@ -696,7 +699,7 @@ Tensor SwitchExecGraph::MergeAllParamSlices(const Tensor& param, ParamBlock& blo
       for (int32_t k = 0; k < uncontiguous_slice_multiple; k++) {
         slice_num[dim] = basic_slice_num + i * uncontiguous_slice_multiple + k;
         slice_relative_num[dim] = j * uncontiguous_slice_multiple + k;
-        Tensor merged_slice = MergeAllParamSlices(param, block, device, group, slice_num, slice_relative_num, state, multiple, dim + 1,
+        Tensor merged_slice = MergeAllParamSlices(param, block, device, pg_union, slice_num, slice_relative_num, state, multiple, dim + 1,
                                                   is_uncontiguous, uncontiguous_ordinal, uncontiguous_multiple, uncontiguous_slice_multiple, comp_stream_idx);
         merged_slices.push_back(std::move(merged_slice));
       }
@@ -707,7 +710,7 @@ Tensor SwitchExecGraph::MergeAllParamSlices(const Tensor& param, ParamBlock& blo
     for (int32_t i = 0; i < multiple[dim]; ++i) {
       slice_num[dim] = basic_slice_num + i;
       slice_relative_num[dim] = i;
-      Tensor merged_slice = MergeAllParamSlices(param, block, device, group, slice_num, slice_relative_num, state, multiple, dim + 1,
+      Tensor merged_slice = MergeAllParamSlices(param, block, device, pg_union, slice_num, slice_relative_num, state, multiple, dim + 1,
                                                 is_uncontiguous, uncontiguous_ordinal, uncontiguous_multiple, uncontiguous_slice_multiple, comp_stream_idx);
       merged_slices.push_back(std::move(merged_slice));
     }  
@@ -718,7 +721,7 @@ Tensor SwitchExecGraph::MergeAllParamSlices(const Tensor& param, ParamBlock& blo
   auto& concatenate_op = concatenate_output->producer();
   // 其他device上生成的不需要map placement_group和placement
   if (hetu::impl::comm::GetLocalDevice() == device) { 
-    concatenate_op->MapToParallelDevices({{group}});
+    concatenate_op->MapToParallelDevices(pg_union);
     concatenate_op->Instantiate(device, comp_stream_idx);
     dynamic_cast<ExecutableGraph&>(concatenate_op->graph()).RecordExecTensor(concatenate_output);
   }  
@@ -731,7 +734,7 @@ Tensor SwitchExecGraph::MergeAllParamSlices(const Tensor& param, ParamBlock& blo
 // support hetero param now
 void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, const DeviceGroupUnion& src_group_union,
                                   const DistributedStatesUnion& dst_ds_union, const DeviceGroupUnion& dst_group_union,
-                                  const Tensor& comm_input, const Tensor& after_param, const HTShape& global_shape, 
+                                  const Tensor& comm_input, const Tensor& after_param, const SyShape& sy_global_shape, 
                                   const StreamIndex comp_stream_idx) {
   // safety check
   HT_ASSERT(src_ds_union.size() == src_group_union.size() && dst_ds_union.size() == dst_group_union.size())
@@ -775,7 +778,8 @@ void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, co
   }
   auto local_device = hetu::impl::comm::GetLocalDevice();
   std::vector<int32_t> block_shape;
-  HTShape slice_shape;
+  SyShape sy_slice_shape;
+  HTShape global_shape = get_HTShape_from_SyShape(sy_global_shape);
   // key为union dim
   // 最终最小的切分
   std::unordered_map<size_t, std::vector<int32_t>> src_multiple; 
@@ -818,7 +822,9 @@ void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, co
     if (key == 0 && dst_uncontiguous) {
       max_dst_dim *= dst_uncontiguous_multiple;
     }
-    auto max_dim = std::max(max_src_dim, max_dst_dim);
+    // auto max_dim = std::max(max_src_dim, max_dst_dim);
+    // support non-2^x slicing: calculate the LCM of max_src_dim and max_dst_dim
+    auto max_dim = (max_src_dim / std::gcd(max_src_dim, max_dst_dim)) * max_dst_dim;
     if (key == 0 && src_uncontiguous) {
       HT_ASSERT(max_dim % max_src_dim == 0)
         << "only support scaling by an integer";
@@ -830,7 +836,7 @@ void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, co
       dst_uncontiguous_slice_multiple = max_dim / max_dst_dim;
     }
     block_shape.push_back(max_dim); 
-    slice_shape.push_back(global_shape.at(key) / max_dim);
+    sy_slice_shape.push_back(sy_global_shape.at(key) / max_dim);
     for (size_t i = 0; i < src_union_size; i++) {
       const auto& local_src_dim = local_src_dim_list.at(i);
       HT_ASSERT(max_dim % local_src_dim == 0)
@@ -850,8 +856,8 @@ void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, co
   const TensorName& param_block_name = after_param->name();
   HT_LOG_DEBUG << local_device << ": make an abstract block for " << param_block_name
     << ", whose mesh shape is " << block_shape
-    << ", and each slice of the mesh has the shape " << slice_shape;
-  auto param_block_ptr = std::make_shared<ParamBlock>(param_block_name, block_shape, slice_shape, this);
+    << ", and each slice of the mesh has the shape " << get_HTShape_from_SyShape(sy_slice_shape);
+  auto param_block_ptr = std::make_shared<ParamBlock>(param_block_name, block_shape, sy_slice_shape, this);
   std::vector<int32_t> slice_num(param_dims, 0);
   CreateParamBlock(*param_block_ptr, slice_num, param_block_name, 0);
   _param_blocks.push_back(param_block_ptr);
@@ -877,8 +883,8 @@ void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, co
       HTShape curr_device_input_local_shape(global_shape.size());
       for (size_t d = 0; d < curr_device_input_local_shape.size(); d++) {
         curr_device_input_local_shape[d] = global_shape.at(d) / local_src_ds_list.at(union_dim).get_dim(d);
-        if (d == 0 && src_uncontiguous) {
-          curr_device_input_local_shape[d] = curr_device_input_local_shape[d] / src_uncontiguous_multiple;
+        if (d == src_ds_union.hetero_dim()) {
+          curr_device_input_local_shape[d] /= src_ds_union.size();
         }
       }
       comm_input->set_symbolic_shape(curr_device_input_local_shape);
@@ -886,7 +892,7 @@ void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, co
       HT_LOG_DEBUG << local_device << ": MakeAllParamSlices for tensor " << comm_input << " at device " << src_group.get(i)
         << ", cur_state_index = " << cur_state_index << " and src_multiple = " << src_multiple.at(union_dim)
         << ", comm_input shape = " << curr_device_input_local_shape;
-      MakeAllParamSlices(comm_input, *param_block_ptr, src_group.get(i), src_group, cur_slice_num, cur_slice_relative_num, 
+      MakeAllParamSlices(comm_input, *param_block_ptr, src_group.get(i), src_group_union, cur_slice_num, cur_slice_relative_num, 
                          cur_state_index, src_multiple.at(union_dim), 0,
                          src_uncontiguous, union_dim, 
                          src_uncontiguous_multiple, src_uncontiguous_slice_multiple,
@@ -916,7 +922,7 @@ void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, co
       // 返回的result即为新exec graph中最终合并后的param
       HT_LOG_DEBUG << local_device << ": MergeAllParamSlices for tensor " << after_param << " at device " << dst_group.get(i)
         << ", cur_state_index = " << cur_state_index << " and dst_multiple = " << dst_multiple;
-      auto result = MergeAllParamSlices(after_param, *param_block_ptr, dst_group.get(i), dst_group, cur_slice_num, cur_slice_relative_num, 
+      auto result = MergeAllParamSlices(after_param, *param_block_ptr, dst_group.get(i), dst_group_union, cur_slice_num, cur_slice_relative_num, 
                                         cur_state_index, dst_multiple.at(union_dim), 0,
                                         dst_uncontiguous, union_dim, 
                                         dst_uncontiguous_multiple, dst_uncontiguous_slice_multiple,
@@ -926,8 +932,8 @@ void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, co
       if (local_device == dst_group.get(i)) {
         HT_ASSERT(result->shape() == after_param->shape())
           << local_device << ": result shape mismatches for " << after_param
-          << ", the global shape is " << global_shape
-          << ", the slice shape is " << slice_shape
+          << ", the global shape is " << get_HTShape_from_SyShape(sy_global_shape)
+          << ", the slice shape is " << get_HTShape_from_SyShape(sy_slice_shape)
           << ", the src ds union is " << src_ds_union.ds_union_info()
           << ", the dst ds union is " << dst_ds_union.ds_union_info()
           << ", the shape in comm graph is " << result->shape()
@@ -1068,8 +1074,8 @@ void SwitchExecGraph::MakeCommGraph(SWITCH_MODE switch_mode, SWITCH_LEVEL switch
     else {
       HT_LOG_DEBUG << local_device << ": param " << define_param << " is in both graphs";
       // 注意这里用了一个trick
-      // 如果是param那么这里的iter都是tensor_to_exec_tensor_mapping的iter
-      // 如果是grad那么这里的iter都是grad_map的iter
+      // 如果是origin_param那么这里的iter都是tensor_to_exec_tensor_mapping的iter
+      // 如果是transfer_param或者grad那么这里的iter都是transfer_map或者grad_map的iter
       auto& before_param = before_it->second;
       auto& after_param = after_it->second;
       HT_ASSERT(before_param->global_shape() == after_param->global_shape())
@@ -1149,7 +1155,10 @@ void SwitchExecGraph::MakeCommGraph(SWITCH_MODE switch_mode, SWITCH_LEVEL switch
       HT_LOG_DEBUG << local_device << ": switch param from " << before_param << " to " << after_param
         << ", src group union = " << src_group_union << " and dst group union = " << dst_group_union
         << ", src ds states union = " << src_ds_union.ds_union_info() << " and dst states union = " << dst_ds_union.ds_union_info();
-      SwitchParam(src_ds_union, src_group_union, dst_ds_union, dst_group_union, comm_input, after_param, after_param->global_shape(), comp_stream_idx);
+      // SyShape is not needed in a determined switch_exec_comm_graph, just directly set it as the actual shape
+      SyShape sy_global_shape(after_param->global_shape().size());
+      set_HTShape_to_SyShape(after_param->global_shape(), sy_global_shape);
+      SwitchParam(src_ds_union, src_group_union, dst_ds_union, dst_group_union, comm_input, after_param, sy_global_shape, comp_stream_idx);
     }
   }
 
@@ -1270,6 +1279,7 @@ void SwitchExecGraph::MakeCommGraph(SWITCH_MODE switch_mode, SWITCH_LEVEL switch
         Graph::ReplaceInput(consumer, j, new_tensor);
       }
     }
+    dynamic_cast<ExecutableGraph&>(old_tensor->graph()).DeleteExecOp(old_tensor->producer());
   }
 
   // 计算concat后param在buffer中的偏移
@@ -2046,6 +2056,7 @@ Tensor ComplexExecComm::Instantiate() {
   if (_is_instantiated) {
     HT_RUNTIME_ERROR << "already inserted the repartition op";
   }
+  auto comm_stream_idx = kP2PStream;
   auto local_device = hetu::impl::comm::GetLocalDevice();
   const auto& src_hetero_dim = _comm_info.src_ds_union.hetero_dim();
   const auto& dst_hetero_dim = _comm_info.dst_ds_union.hetero_dim();
@@ -2062,69 +2073,104 @@ Tensor ComplexExecComm::Instantiate() {
     << "local device is not in the comm group";
   HT_ASSERT(src_ds.states(-2) == dst_ds.states(-2))
     << "src ds and dst ds should have same partial";
-  HT_ASSERT(src_hetero_dim == dst_hetero_dim && src_hetero_size == dst_hetero_size)
-    << "src hetero dim & size should be equal to dst hetero dim & size";
   HT_ASSERT(comm_input->global_shape() == comm_output->global_shape())
     << "src global shape should be equal to dst global shape";
-  auto global_shape(comm_input->global_shape());
-  if (src_hetero_dim >= 0) {
-    global_shape.at(src_hetero_dim) /= src_hetero_size;
-  }
-  // 再对partial维度进行划分
-  // partial idx相同的group进行repartition操作
-  DeviceGroupUnion partial_src_dg_union = DeviceGroupUnion::device_group_to_union(src_group, src_ds, -2, src_ds.states(-2));
-  DeviceGroupUnion partial_dst_dg_union = DeviceGroupUnion::device_group_to_union(dst_group, dst_ds, -2, dst_ds.states(-2));
-  size_t partial_idx = 0;
-  bool find_partial = false;
-  for (size_t i = 0; i < src_ds.states(-2); i++) {
-    if (partial_src_dg_union.get(i).contains(local_device)
-        || partial_dst_dg_union.get(i).contains(local_device)) {
-      HT_ASSERT(find_partial == false)
-        << "Currently only support local device in a single partial group";
-      partial_idx = i;
-      find_partial = true;
-    }
-  }
-  HT_ASSERT(find_partial)
-    << "double check fault";
-  auto& partial_src_group = partial_src_dg_union.get(partial_idx);
-  auto& partial_dst_group = partial_dst_dg_union.get(partial_idx);
-  auto partial_src_ds_states = src_ds.reduce_states(-2);
-  auto partial_src_ds_order = src_ds.reduce_order(-2);
-  DistributedStates partial_src_ds = DistributedStates(src_ds.get_device_num() / src_ds.states(-2),
-                                                       partial_src_ds_states,
-                                                       partial_src_ds_order,
-                                                       src_ds.zero());
-  auto partial_dst_ds_states = dst_ds.reduce_states(-2);
-  auto partial_dst_ds_order = dst_ds.reduce_order(-2);
-  DistributedStates partial_dst_ds = DistributedStates(dst_ds.get_device_num() / dst_ds.states(-2),
-                                                       partial_dst_ds_states,
-                                                       partial_dst_ds_order,
-                                                       dst_ds.zero());
   // 因为要支持single exec graph multi shape plan
   // 所以这里要设置symbolic shape
   if (!comm_input->symbolic()) {
     comm_input->init_symbolic_shape();
   }
-  for (auto& device : partial_src_group.devices()) {
-    if (_comm_set.find(device) == _comm_set.end()) {
-      _comm_set.insert(device);
+  auto sy_global_shape = comm_input->symbolic_global_shape();
+  // Malleus hetero cross stage pp op
+  // 这里其实不需要特判
+  // 但因为代码上的历史遗留原因这里仍保留之前的写法
+  if (src_hetero_dim == dst_hetero_dim && src_hetero_size == dst_hetero_size) {
+    if (src_hetero_dim >= 0) {
+      sy_global_shape.at(src_hetero_dim) = sy_global_shape.at(src_hetero_dim) / src_hetero_size;
     }
-  }
-  for (auto& device : partial_dst_group.devices()) {
-    if (_comm_set.find(device) == _comm_set.end()) {
-      _comm_set.insert(device);
+    // 再对partial维度进行划分
+    // partial idx相同的group进行repartition操作
+    DeviceGroupUnion partial_src_dg_union = DeviceGroupUnion::device_group_to_union(src_group, src_ds, -2, src_ds.states(-2));
+    DeviceGroupUnion partial_dst_dg_union = DeviceGroupUnion::device_group_to_union(dst_group, dst_ds, -2, dst_ds.states(-2));
+    size_t partial_idx = 0;
+    bool find_partial = false;
+    for (size_t i = 0; i < src_ds.states(-2); i++) {
+      if (partial_src_dg_union.get(i).contains(local_device)
+          || partial_dst_dg_union.get(i).contains(local_device)) {
+        HT_ASSERT(find_partial == false)
+          << "Currently only support local device in a single partial group";
+        partial_idx = i;
+        find_partial = true;
+      }
     }
+    HT_ASSERT(find_partial)
+      << "double check fault";
+    auto& partial_src_group = partial_src_dg_union.get(partial_idx);
+    auto& partial_dst_group = partial_dst_dg_union.get(partial_idx);
+    auto partial_src_ds_states = src_ds.reduce_states(-2);
+    auto partial_src_ds_order = src_ds.reduce_order(-2);
+    DistributedStates partial_src_ds = DistributedStates(src_ds.get_device_num() / src_ds.states(-2),
+                                                        partial_src_ds_states,
+                                                        partial_src_ds_order,
+                                                        src_ds.zero());
+    auto partial_dst_ds_states = dst_ds.reduce_states(-2);
+    auto partial_dst_ds_order = dst_ds.reduce_order(-2);
+    DistributedStates partial_dst_ds = DistributedStates(dst_ds.get_device_num() / dst_ds.states(-2),
+                                                        partial_dst_ds_states,
+                                                        partial_dst_ds_order,
+                                                        dst_ds.zero());
+    for (auto& device : partial_src_group.devices()) {
+      if (_comm_set.find(device) == _comm_set.end()) {
+        _comm_set.insert(device);
+      }
+    }
+    for (auto& device : partial_dst_group.devices()) {
+      if (_comm_set.find(device) == _comm_set.end()) {
+        _comm_set.insert(device);
+      }
+    }
+    /*
+    HT_LOG_INFO << "stage op " << _comm_op << " with global shape " << get_HTShape_from_SyShape(sy_global_shape)
+      << ", partial src ds = " << partial_src_ds.ds_info()
+      << ", partial dst ds = " << partial_dst_ds.ds_info()
+      << ", partial src group = " << partial_src_group
+      << ", partial dst group = " << partial_dst_group;
+    */
+    // 这里slice与concat还是正常的kComputingStream
+    SwitchParam({{partial_src_ds}}, {{partial_src_group}}, {{partial_dst_ds}}, {{partial_dst_group}}, comm_input, comm_output, sy_global_shape, kComputingStream);
   }
-  // planning
-  /*
-  HT_LOG_INFO << "planning for " << _comm_op << " with global shape " << global_shape
-    << ", partial src ds = " << partial_src_ds.ds_info()
-    << ", partial dst ds = " << partial_dst_ds.ds_info()
-    << ", partial src group = " << partial_src_group
-    << ", partial dst group = " << partial_dst_group;
-  */
-  SwitchParam({{partial_src_ds}}, {{partial_src_group}}, {{partial_dst_ds}}, {{partial_dst_group}}, comm_input, comm_output, global_shape, kComputingStream);
+  // Hydraulis hetero optimize-compute or compute-optimize bridge op
+  else {
+    for (const auto& cur_src_ds : _comm_info.src_ds_union.raw_data()) {
+      HT_ASSERT(cur_src_ds.states(-2) == 1)
+        << "bridge op can't include reduction";
+    }
+    for (const auto& cur_dst_ds : _comm_info.dst_ds_union.raw_data()) {
+      HT_ASSERT(cur_dst_ds.states(-2) == 1)
+        << "bridge op can't include reduction";
+    }
+    auto src_device_group_all = _comm_info.src_group_union.all();
+    auto dst_device_group_all = _comm_info.dst_group_union.all();
+    for (const auto& device : src_device_group_all.devices()) {
+      if (_comm_set.find(device) == _comm_set.end()) {
+        _comm_set.insert(device);
+      }
+    }
+    for (const auto& device : dst_device_group_all.devices()) {
+      if (_comm_set.find(device) == _comm_set.end()) {
+        _comm_set.insert(device);
+      }
+    }
+    /*
+    HT_LOG_INFO << "bridge op " << _comm_op << " with global shape " << get_HTShape_from_SyShape(sy_global_shape)
+      << ", src ds union = " << _comm_info.src_ds_union.ds_union_info()
+      << ", dst ds union = " << _comm_info.dst_ds_union.ds_union_info()
+      << ", src group union = " << _comm_info.src_group_union
+      << ", dst group union = " << _comm_info.dst_group_union;
+    */
+    // 为了compute和comm的overlap这里slice与concat也使用comm_stream
+    SwitchParam(_comm_info.src_ds_union, _comm_info.src_group_union, _comm_info.dst_ds_union, _comm_info.dst_group_union, comm_input, comm_output, sy_global_shape, comm_stream_idx);
+  }
   HT_ASSERT(_param_blocks.size() == 1)
     << "size wrong";
   for (auto& param_block_ptr : _param_blocks) {
@@ -2132,6 +2178,7 @@ Tensor ComplexExecComm::Instantiate() {
   }
   // 通信组
   std::vector<Device> comm_devices(_comm_set.begin(), _comm_set.end());
+  // HT_LOG_INFO << "comm devices are " << comm_devices;
   auto comm_device_group = DeviceGroup(comm_devices);
   // local_device send to other devices
   std::vector<Device>& send_to_devices = _send_mapping[local_device].first;
@@ -2145,6 +2192,7 @@ Tensor ComplexExecComm::Instantiate() {
     HT_ASSERT(_recv_mapping[local_device].second[i]->symbolic())
       << "recv tensors should be symbolic";
     recv_tensor_shapes.push_back(_recv_mapping[local_device].second[i]->symbolic_shape());
+    // HT_LOG_INFO << _recv_mapping[local_device].second[i] << " shape is " << get_HTShape_from_SyShape(_recv_mapping[local_device].second[i]->symbolic_shape());
   }
   /*
   HT_LOG_WARN << local_device << ": will send " << send_len << " tensor to devices " 
@@ -2165,15 +2213,7 @@ Tensor ComplexExecComm::Instantiate() {
     dynamic_cast<ExecutableGraph&>(batched_isend_irecv_op->graph()).RecordExecTensor(recv_tensor);
   }
   batched_isend_irecv_op->MapToParallelDevices({{comm_device_group}});
-  // intra
-  if (src_group == dst_group) {
-    HT_LOG_WARN << "Currently seldom used";
-    batched_isend_irecv_op->Instantiate(local_device, kCollectiveStream);
-  } 
-  // inter
-  else {
-    batched_isend_irecv_op->Instantiate(local_device, kP2PStream);
-  }
+  batched_isend_irecv_op->Instantiate(local_device, comm_stream_idx);
   // 将原先的placeholder替换为recv_tensor
   HT_ASSERT(recv_len == recv_tensors.size())
     << "something wrong with the recv len";
@@ -2188,6 +2228,7 @@ Tensor ComplexExecComm::Instantiate() {
         Graph::ReplaceInput(consumer, j, new_tensor);
       }
     }
+    dynamic_cast<ExecutableGraph&>(old_tensor->graph()).DeleteExecOp(old_tensor->producer());
   }
   // add dummy link for topo sort
   // connect comm_op->input producer with batchISendIRecvOp when needn't send

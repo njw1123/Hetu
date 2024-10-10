@@ -308,7 +308,7 @@ class Module(object):
                 print(self.__class__.__name__, "Not Have Module_Name")
             else:
                 # print(self.__class__.__name__,  "Module_Name:", self.module_name, "Global_name:", self.global_name)
-                stack.enter_context(hetu.subgraph(subgraph_type = self.__class__.__name__, name = self.module_name))
+                stack.enter_context(hetu.subgraph(name = self.module_name, module_type = self.__class__.__name__))
                 _parameters = self.__dict__.get('_parameters')
                 for key, param in _parameters.items():
                     # print(self.module_name, " ", key, " ", type(param), param)

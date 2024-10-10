@@ -151,6 +151,27 @@ uint64_t CommOpImpl::get_comm_type(Operator& op, const Device& inferred, const C
   }
   // 2、hetero dim不一样
   else {
+    // 2-1、不存在reduce
+    // 统一使用all to all
+    // TODO: split all gather或许会比all to all更快
+    bool no_reduction = true;
+    for (size_t i = 0; i < info.src_group_union.size(); i++) {
+      if (info.src_ds_union.get(i).states(-2) != 1) {
+        no_reduction = false;
+        break;
+      }
+    }
+    for (size_t i = 0; i < info.dst_group_union.size(); i++) {
+      if (info.dst_ds_union.get(i).states(-2) != 1) {
+        no_reduction = false;
+        break;
+      }
+    }
+    if (no_reduction) {
+      _comm_type = BATCHED_ISEND_IRECV_OP;
+      return _comm_type;
+    }
+    // 2-2、存在reduce
     HT_ASSERT(info.src_group_union.check_equal(info.dst_group_union))
       << "Currently only support intra-group multi hetero dim comm";
     // DistributedStatesList src_local_ds_list, dst_local_ds_list;

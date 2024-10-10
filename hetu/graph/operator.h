@@ -566,12 +566,13 @@ class OpDef : public shared_ptr_target {
     BlockOrSyncAllInputs(runtime_ctx, micro_batch_id);
     // correctness debug
     /*
-    HTShapeList input_shapes;
+    HTShapeList input_shapes, input_strides;
     for (auto& input : inputs) {
       input_shapes.push_back(input->shape());
+      input_strides.push_back(input->stride());
     }
     HT_LOG_INFO << hetu::impl::comm::GetLocalDevice() << " micro batch: " << micro_batch_id << ", compute op: " << name()
-      << ", the inputs are " << this->inputs() << " and the input shapes are " << input_shapes;
+      << ", the inputs are " << this->inputs() << " and the input shapes are " << input_shapes << ", strides are " << input_strides;
     */
     // precision debug
     /*
@@ -597,12 +598,13 @@ class OpDef : public shared_ptr_target {
     */
     // correctness debug
     /*
-    HTShapeList ret_shapes;
+    HTShapeList ret_shapes, ret_strides;
     for (auto& ret : rets) {
       ret_shapes.push_back(ret->shape());
+      ret_strides.push_back(ret->stride());
     }
     HT_LOG_INFO << hetu::impl::comm::GetLocalDevice() << " micro batch: " << micro_batch_id << ", compute op: " << name()
-      << ", the return shapes are " << ret_shapes;
+      << ", the return shapes are " << ret_shapes << ", strides are " << ret_strides;
     */
     // for some ops that rely on symbolic shape
     // 2024.9.5 Update:

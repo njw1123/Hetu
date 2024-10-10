@@ -8,6 +8,11 @@ namespace graph {
 NDArrayList SliceOpImpl::DoCompute(Operator& op,
                                    const NDArrayList& inputs,
                                    RuntimeContext& ctx) const {
+  if (ctx.has_runtime_allocation(op->output(0)->id())) {
+    auto output = ctx.get_runtime_allocation(op->output(0)->id());
+    NDArray::copy(inputs.at(0), op->instantiation_ctx().stream_index, output);
+    return {output};
+  }
   return {NDArray::slice(inputs.at(0), get_begin_pos(), get_output_shape(),
                          op->instantiation_ctx().stream_index)};
 }

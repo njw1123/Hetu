@@ -11,12 +11,23 @@
 #include "hetu/graph/recompute/recompute.h"
 #include "hetu/graph/offload/activation_cpu_offload.h"
 #include "hetu/impl/memory/CUDACachingMemoryPool.cuh"
+#include <queue>
 
 namespace hetu {
 namespace graph {
 
 // changing parallel plan
 static size_t change_parallel_test_case = 0;
+
+static std::shared_ptr<SubGraph> MakeExecSubgraph(std::shared_ptr<ExecutableGraph> exec_graph, std::shared_ptr<SubGraph> define_subgraph) {
+  if (define_subgraph->parent_graph() != nullptr) {
+    MakeExecSubgraph(exec_graph, define_subgraph->parent_graph());
+  }
+  return exec_graph->MakeSubGraph(define_subgraph->subgraph_type(),
+                                  define_subgraph->global_name(),
+                                  false,
+                                  define_subgraph->module_type());
+}
 
 Operator& DefineAndRunGraph::MakeOpInner(std::shared_ptr<OpInterface> body,
                                          TensorList inputs, OpMeta op_meta) {
@@ -36,6 +47,27 @@ Operator& DefineAndRunGraph::MakeOpInner(std::shared_ptr<OpInterface> body,
   if (op->device_group_hierarchy().size() == NUM_STRATEGY) {
     _ops_with_device_group_hierarchy.emplace_back(op);
   } 
+  /*
+  // record the subgraph
+  // workaround: 暂时不把pipeline插入的comm op放到任何subgraph中
+  // 单独将其放在一个subgraph中
+  if (op->name().find("pipeline_layer") != std::string::npos) {
+    auto pipeline_layer_subgraph = MakeSubGraph(SubGraphType::PIPELINE, op->name(), true);
+    AddOpToSubGraph(op, pipeline_layer_subgraph->global_name());
+    return _op_indexing[op->id()];
+  }
+  */
+  if (get_cur_subgraph_global_name() != "") {
+    AddOpToSubGraph(op, get_cur_subgraph_global_name());
+  }
+  /*
+  if (is_optimizer_update_op(op)) {
+    std::shared_ptr<SubGraph> subgraph = graph.GetSubGraph(op->input(0)->producer());
+    if (subgraph != nullptr) {
+      graph.AddOpToSubGraph(op, subgraph->global_name(), SubGraphOpType::UPDATE);
+    }
+  }
+  */
   return _op_indexing[op->id()];
 }
 
@@ -135,10 +167,10 @@ void DefineAndRunGraph::MergeGraph(DefineAndRunGraph& another_graph) {
   }
 }
 
-// 推导define graph在cur_strategy_id下的pipeline构造
-void DefineAndRunGraph::DeducePipeline(size_t cur_strategy_id, int32_t pipeline_num) {
+// 推导define graph在compute_strategy_id下的pipeline构造
+void DefineAndRunGraph::DeducePipeline(size_t compute_strategy_id, int32_t pipeline_num) {
   auto old_strategy_id = CUR_STRATEGY_ID;
-  CUR_STRATEGY_ID = cur_strategy_id;
+  CUR_STRATEGY_ID = compute_strategy_id;
   std::unordered_map<Device, int32_t> device_to_pipeline_idx_map;
   std::vector<DeviceGroupList> pipelines(pipeline_num);
   int32_t total_p2pline = -1;
@@ -156,7 +188,12 @@ void DefineAndRunGraph::DeducePipeline(size_t cur_strategy_id, int32_t pipeline_
       continue;
     }
     auto& dg_union = op->device_group_union();
-    auto& ds_union = op->output(0)->cur_ds_union();
+    // auto& ds_union = op->output(0)->cur_ds_union(); // 需要使用zero之前的
+    auto before_zero_it = _ds_hierarchy_before_zero.find(op->output(0)->id());
+    HT_ASSERT(before_zero_it != _ds_hierarchy_before_zero.end())
+      << "cannot find the ds hierarchy of " << op->input(0)->producer() << " before zero"
+      << ", note no zero should also have it";
+    auto& ds_union = before_zero_it->second.get(compute_strategy_id);
     // HT_LOG_INFO << op << " device group union: " << dg_union << " and ds union: " << ds_union.ds_union_info();
     HT_ASSERT(dg_union.size() != 0 && ds_union.size() != 0 && dg_union.size() == ds_union.size())
       << "dg union & ds union of " << op << " shouldn't be empty and should have the same size";
@@ -303,22 +340,45 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
     if (handle_feed_dict_op || is_placeholder_op(op)) {
       continue;
     }
-    HTShapeList input_shapes;
-    input_shapes.reserve(op->num_inputs());
-    for (const auto& input : op->inputs()) {
-      auto it = shape_plan.find(input->id());
-      HT_ASSERT(it != shape_plan.end()) 
-        << "Something wrong, can't find the input shape from the current shape plan!"
-        << "op:" << op;
-      input_shapes.push_back(it->second);
-    }
     auto it = exec_graph_plan.op_to_exec_op_mapping.find(op->id());
     HT_ASSERT(it != exec_graph_plan.op_to_exec_op_mapping.end())
       << op << " doesn't have an exec version";
     auto& exec_op = it->second;
+    HTShapeList input_shapes;
+    input_shapes.reserve(op->num_inputs());
+    for (size_t i = 0; i < op->num_inputs(); i++) {
+      const auto& input = op->input(i);
+      const auto& exec_input = exec_op->input(i);
+      auto it = shape_plan.find(input->id());
+      HT_ASSERT(it != shape_plan.end()) 
+        << "Something wrong, can't find the input shape from the current shape plan"
+        << ", the op is " << op;
+      auto input_shape = it->second;
+      // workaround: 强行转化为before zero的形式
+      // 因为zero到before zero插入的optimize-compute bridge subgraph在define graph中并没有
+      if (_parameter_ops.find(input->producer()->id()) != _parameter_ops.end()) {
+        auto before_zero_it = _ds_hierarchy_before_zero.find(input->id());
+        HT_ASSERT(before_zero_it != _ds_hierarchy_before_zero.end())
+          << "cannot find " << input << " ds hierarchy before zero";
+        const auto& global_shape = dynamic_cast<ParallelVariableOpImpl&>(input->producer()->body()).global_shape();
+        auto& cur_ds = before_zero_it->second.get(COMPUTE_STRATEGY_ID).get(exec_input->producer()->inferred_local_placement_group_idx());
+        for (size_t d = 0; d < input_shape.size(); d++) {
+          input_shape.at(d) = global_shape.at(d) / cur_ds.get_dim(d);
+        } 
+      }
+      input_shapes.push_back(input_shape);
+    }
     // 使用exec op的InferShape而不是op的InferShape
     // 因为exec op已经具有placement group union
     // 因此可以得到local device对应的ds
+    if (_parameter_ops.find(op->id()) != _parameter_ops.end()
+        || _optimizer_variable_ops.find(op->id()) != _optimizer_variable_ops.end()) {
+      CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
+      exec_graph_plan.exec_graph->CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
+    } else {
+      CUR_STRATEGY_ID = COMPUTE_STRATEGY_ID;
+      exec_graph_plan.exec_graph->CUR_STRATEGY_ID = COMPUTE_STRATEGY_ID;
+    }
     HTShapeList exec_output_shapes = exec_op->InferShape(input_shapes, runtime_ctx);
     // HT_LOG_INFO << exec_op << " output shapes are " << exec_output_shapes;
     auto exec_output_shapes_size = exec_output_shapes.size();
@@ -356,6 +416,8 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
   }
   // exec graph中还有一些新增的tensor
   // 需要再进行一次额外的推导
+  CUR_STRATEGY_ID = COMPUTE_STRATEGY_ID;
+  exec_graph_plan.exec_graph->CUR_STRATEGY_ID = COMPUTE_STRATEGY_ID;
   for (const auto& exec_tensor : exec_graph_plan.exec_graph->_record_exec_tensors) {
     auto& exec_op = exec_tensor->producer();
     HTShapeList exec_input_shapes;
@@ -364,6 +426,7 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
       auto it = exec_shape_plan.find(exec_input->id());
       HT_ASSERT(it != exec_shape_plan.end()) 
         << "Something wrong, can't find the input shape of " << exec_input
+        << " (one of the input of " << exec_op << ")"
         << " from the current exec shape plan!";
       exec_input_shapes.push_back(it->second);
     }
@@ -544,19 +607,20 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
   auto local_device = hetu::impl::comm::GetLocalDevice();
   auto exec_graph = Graph::_make_new_graph<ExecutableGraph>(name() + "_executable_" + std::to_string(exec_graph_num));
   exec_graph->NUM_STRATEGY = NUM_STRATEGY;
-  exec_graph->CUR_STRATEGY_ID = CUR_STRATEGY_ID;
+  exec_graph->COMPUTE_STRATEGY_ID = COMPUTE_STRATEGY_ID;
+  exec_graph->OPTIMIZE_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
   // HT_LOG_INFO << local_device << ": instantiate " << exec_graph->name();
   Graph::push_graph_ctx(exec_graph->id());
 
   // assign pp stages
   // HT_LOG_WARN << local_device << ": Deduce pipeline";
-  if (_multi_pipeline_maps.find(CUR_STRATEGY_ID) == _multi_pipeline_maps.end()) {
-    _multi_pipeline_maps[CUR_STRATEGY_ID] = Device2PipelineMap();
-    DeducePipeline(CUR_STRATEGY_ID, pipeline_num);
+  if (_multi_pipeline_maps.find(COMPUTE_STRATEGY_ID) == _multi_pipeline_maps.end()) {
+    _multi_pipeline_maps[COMPUTE_STRATEGY_ID] = Device2PipelineMap();
+    DeducePipeline(COMPUTE_STRATEGY_ID, pipeline_num);
   }
-  exec_graph->SetPipeline(_multi_pipeline_maps[CUR_STRATEGY_ID]);
+  exec_graph->SetPipeline(_multi_pipeline_maps[COMPUTE_STRATEGY_ID]);
   std::vector<int> used_ranks;
-  for (const auto& kv : _multi_pipeline_maps[CUR_STRATEGY_ID]) {
+  for (const auto& kv : _multi_pipeline_maps[COMPUTE_STRATEGY_ID]) {
     for (const auto& stage : kv.second) {
       for (const auto& device : stage.devices()) {
         auto rank = hetu::impl::comm::DeviceToWorldRank(device);
@@ -611,7 +675,8 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
     }
     // 4)、assign ds_hierarchy
     // just copy it from define graph
-    exec_tensor->set_ds_hierarchy(tensor->ds_hierarchy());
+    // exec_tensor->set_ds_hierarchy(tensor->ds_hierarchy());
+    exec_tensor->set_cur_ds_union(tensor->cur_ds_union());
     // HT_LOG_WARN << exec_tensor << " ds " << exec_tensor->cur_ds_union().ds_union_info();
     // 5)、assign add on inits
     auto it = _add_on_inits.find(tensor->id());
@@ -652,7 +717,8 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
     // 前处理
     // 1、获取exec op的inputs
     // 2、推导placement group union
-    // 3、进行autocast
+    // 3、生成exec op的subgraph
+    // 4、建立optimize-compute bridge & compute-optimize bridge subgraph
     TensorList exec_inputs, exec_in_deps;
     std::tie(exec_inputs, exec_in_deps) = Operator::transform_each_input_tensor(op, get_exec_input);
 
@@ -665,10 +731,33 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
     HT_LOG_INFO << "Exec op " << op << " with inputs " << exec_inputs << " and shapes " << exec_input_shapes;
     */
 
+    if (_parameter_ops.find(op->id()) != _parameter_ops.end()
+        || _optimizer_variable_ops.find(op->id()) != _optimizer_variable_ops.end()) {
+      CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
+      exec_graph->CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
+    } else {
+      CUR_STRATEGY_ID = COMPUTE_STRATEGY_ID;
+      exec_graph->CUR_STRATEGY_ID = COMPUTE_STRATEGY_ID;
+    }
+
     // HT_LOG_WARN << local_device << ": deduce placement group union for " << op;
     auto pg_union = DeducePlacementGroup(op, op_to_pg_union_mapping);
     HT_LOG_TRACE << local_device << ": placement group union for " << op << " is " << pg_union;
 
+    std::shared_ptr<SubGraph> exec_subgraph = nullptr;
+    std::shared_ptr<SubGraph> define_subgraph = GetSubGraph(op);
+    if (define_subgraph != nullptr) {
+      // HT_LOG_INFO << op << " is placed in subgraph " << define_subgraph->global_name();
+      exec_subgraph = MakeExecSubgraph(exec_graph, define_subgraph);
+    } else {
+      // HT_LOG_INFO << op << " has no subgraph";
+    }
+
+    // --- compute topo的开始部分的处理 ---
+    // 要插入一些transfer与comm相关的op
+    // 实现精度转化以及transfer param的获取
+    // TODO: 解耦transfer param与其他精度转化的操作
+    // 同时给transfer param设置buffer和映射
     auto autocast_id = AutoCast::cur_autocast_ctx();
     if (autocast_id != UINT64_MAX) {
       auto autocast = AutoCast::GetAutoCast(autocast_id);
@@ -706,7 +795,8 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
                   // we have to set the exec shape plan manually before the initialization of the plan
                   exec_shape_plan[exec_op->output(0)->id()] = exec_op->output(0)->shape();
                   exec_graph->_record_exec_tensors.emplace_back(exec_op->output(0));
-                  exec_op->output(0)->set_ds_hierarchy(op->input(i)->ds_hierarchy()); // walkaround: set here by hand
+                  // exec_op->output(0)->set_ds_hierarchy(op->input(i)->ds_hierarchy()); // walkaround: set here by hand
+                  exec_op->output(0)->set_cur_ds_union(exec_inputs[i]->cur_ds_union());
                   exec_inputs[i] = exec_op->output(0);
                 }
                 // 插入transfer op 
@@ -722,17 +812,68 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
                   else {
                     auto& exec_op = Graph::MakeOp(std::make_shared<DataTransferOpImpl>(datatype, exec_inputs[i]->device()),
                                     {exec_inputs[i]}, OpMeta().set(exec_inputs[i]->producer()->op_meta()).set_name(exec_inputs[i]->producer()->name() + "_transfer").set_is_deduce_states(false), *exec_graph);
+                    HT_LOG_DEBUG << exec_op << " ds union is " << exec_inputs[i]->cur_ds_union().ds_union_info()
+                      << " and pg union is " << exec_inputs[i]->placement_group_union();
                     exec_op->MapToParallelDevices(exec_inputs[i]->placement_group_union());
                     // we have to set the exec shape plan manually before the initialization of the plan
                     exec_shape_plan[exec_op->output(0)->id()] = exec_op->output(0)->shape();
                     exec_graph->_record_exec_tensors.emplace_back(exec_op->output(0));
-                    exec_op->output(0)->set_ds_hierarchy(op->input(i)->ds_hierarchy()); // walkaround: set here by hand
-                    if (_parameter_ops.find(op->input(i)->producer()->id()) != _parameter_ops.end()
-                        && exec_inputs[i]->producer()->placement_group_union().has(local_device)) {
-                      transfer_param_buffer_map[exec_op->output(0)->dtype()]->AddTensor(exec_op->output(0));
+                    // exec_op->output(0)->set_ds_hierarchy(op->input(i)->ds_hierarchy()); // walkaround: set here by hand
+                    exec_op->output(0)->set_cur_ds_union(exec_inputs[i]->cur_ds_union()); // split-pattern也会被成功复制
+                    // 判断是否是parameter算子
+                    // 注意如果不是本地拥有的也需要考虑
+                    // 因为有可能之后变成本地拥有的
+                    if (_parameter_ops.find(op->input(i)->producer()->id()) != _parameter_ops.end()) {
+                      // 在这里插入comm op实现param从OPTIMIZE_STRATEGY_ID到COMPUTE_STRATEGY_ID的转换
+                      // 在zero情形下可能会被替换为allgather、splitallgather、batchedsendrecv算子
+                      // 注意这里使用COMPUTE_STRATEGY_ID
+                      auto before_zero_it = _ds_hierarchy_before_zero.find(op->input(i)->producer()->id());
+                      HT_ASSERT(before_zero_it != _ds_hierarchy_before_zero.end())
+                        << "cannot find the ds hierarchy of " << op->input(i)->producer() << " before zero"
+                        << ", note no zero should also have it";
+                      auto& transfer_param_ds_union = before_zero_it->second.get(COMPUTE_STRATEGY_ID);
+                      auto& transfer_param_pg_union = op->input(i)->producer()->device_group_hierarchy().get(COMPUTE_STRATEGY_ID);
+                      if (transfer_param_pg_union.has(local_device)) {
+                        exec_graph->CUR_HETERO_ID = transfer_param_pg_union.get_index(local_device);
+                      } else if (exec_op->output(0)->placement_group_union().has(local_device)) {
+                        exec_graph->CUR_HETERO_ID = exec_op->output(0)->placement_group_union().get_index(local_device);
+                      } else {
+                        exec_graph->CUR_HETERO_ID = exec_graph->SUGGESTED_HETERO_ID;
+                      }
+                      auto& exec_comm_op = Graph::MakeOp(std::make_shared<CommOpImpl>(
+                                           DistributedStatesHierarchy{{transfer_param_ds_union}}, 
+                                           DeviceGroupHierarchy{{transfer_param_pg_union}}),
+                                           {exec_op->output(0)}, OpMeta().set_name(exec_op->name() + "_bridge").set_is_deduce_states(false), *exec_graph);
+                      exec_graph->CUR_HETERO_ID = 0;
+                      HT_LOG_DEBUG << exec_comm_op << " ds union is " << transfer_param_ds_union.ds_union_info()
+                        << " and pg union is " << transfer_param_pg_union;
+                      exec_comm_op->MapToParallelDevices(transfer_param_pg_union);
+                      // we have to set the exec shape plan manually before the initialization of the plan
+                      exec_shape_plan[exec_comm_op->output(0)->id()] = exec_comm_op->output(0)->shape();
+                      exec_graph->_record_exec_tensors.emplace_back(exec_comm_op->output(0));
+                      // exec_comm_op->output(0)->set_ds_hierarchy(op->input(i)->ds_hierarchy()); // walkaround: set here by hand
+                      exec_comm_op->output(0)->set_cur_ds_union(transfer_param_ds_union);
+                      if (transfer_param_pg_union.has(local_device)) {
+                        transfer_param_buffer_map[exec_comm_op->output(0)->dtype()]->AddTensor(exec_comm_op->output(0));
+                      }
+                      // 创建并添加到对应param的subgraph中
+                      std::shared_ptr<SubGraph> define_subgraph = GetSubGraph(op->input(i)->producer());
+                      HT_ASSERT(define_subgraph != nullptr)
+                        << op->input(i)->producer() << " is not placed in any define subgraph";
+                      std::shared_ptr<SubGraph> bridge_subgraph = exec_graph->MakeSubGraph(SubGraphType::OPTIMIZE_COMPUTE_BRIDGE,
+                                                                                           define_subgraph->global_name() + "." + op->input(i)->producer()->name() + "_optimize_compute_bridge");
+                      // HT_LOG_DEBUG << "make bridge subgraph " << bridge_subgraph->global_name();
+                      exec_graph->AddOpToSubGraph(exec_op, bridge_subgraph->global_name());
+                      exec_graph->AddOpToSubGraph(exec_comm_op, bridge_subgraph->global_name());
+                      exec_graph->_optimize_compute_bridge_subgraph_map[exec_inputs[i]->id()] = bridge_subgraph;
+                      transfer_map[exec_inputs[i]->id()] = exec_comm_op->output(0);
+                      exec_inputs[i] = exec_comm_op->output(0);
+                    } 
+                    // 其余正常的variable或者placeholder的transfer不需要额外comm
+                    else {
+                      transfer_map[exec_inputs[i]->id()] = exec_op->output(0);
+                      exec_inputs[i] = exec_op->output(0);
                     }
-                    transfer_map[exec_inputs[i]->id()] = exec_op->output(0);
-                    exec_inputs[i] = exec_op->output(0);
                   }
                 }
               }
@@ -740,6 +881,83 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
           }
         }
       }
+    }
+
+    // --- compute topo的结束部分的处理 ---
+    // 要插入一些comm op来将gradient正确地与optimizer对齐
+    // 只有当COMPUTE_STRATEGY_ID与OPTIMIZE_STRATEGY_ID不同时才需要
+    // 同时给grad设置buffer和映射
+    if (is_optimizer_update_op(op)) {
+      auto& param = op->input(0);
+      auto& exec_param = exec_inputs.at(0);
+      auto& exec_grad = exec_inputs.at(1);
+      HT_ASSERT(exec_graph->_parameter_ops.find(exec_param->producer()->id()) != exec_graph->_parameter_ops.end())
+        << "optimizer op " << op << " input 0 " << exec_param << " in exec graph is not a parameter";
+      // 将exec_grad往exec_param的形式上去转
+      if (exec_param->placement_group_union().has(local_device)) {
+        exec_graph->CUR_HETERO_ID = exec_param->placement_group_union().get_index(local_device);
+      } else if (exec_grad->placement_group_union().has(local_device)) {
+        exec_graph->CUR_HETERO_ID = exec_grad->placement_group_union().get_index(local_device);
+      } else {
+        exec_graph->CUR_HETERO_ID = exec_graph->SUGGESTED_HETERO_ID;
+      }
+      auto& exec_comm_op = Graph::MakeOp(std::make_shared<CommOpImpl>(DistributedStatesHierarchy{{exec_param->cur_ds_union()}}, DeviceGroupHierarchy{{exec_param->placement_group_union()}}),
+                           {exec_grad}, OpMeta().set_name(exec_grad->producer()->name() + "_bridge").set_is_deduce_states(false), *exec_graph);
+      exec_graph->CUR_HETERO_ID = 0;
+      exec_comm_op->MapToParallelDevices(exec_param->placement_group_union());
+      // we have to set the exec shape plan manually before the initialization of the plan
+      exec_shape_plan[exec_comm_op->output(0)->id()] = exec_comm_op->output(0)->shape();
+      exec_graph->_record_exec_tensors.emplace_back(exec_comm_op->output(0));
+      exec_comm_op->output(0)->set_cur_ds_union(exec_param->cur_ds_union()); // walkaround: set here by hand
+      // 将转化后的exec_grad作为exec graph中optimizer的新输入
+      exec_inputs.at(1) = exec_comm_op->output(0); 
+      // 热切换接口需要提前设置一些grad的信息
+      auto& new_exec_grad = exec_inputs.at(1);
+      // new_exec_grad->producer()->set_device_group_hierarchy(exec_param->producer()->device_group_hierarchy());
+      if (exec_param->placement_group_union().has(local_device)) {
+        // current_grad_buffer->AddTensor(new_exec_grad);
+        // accumulate_grad_buffer->AddTensor(new_exec_grad);
+        // TODO: better compatibility with hot switch and quantization
+        current_grad_buffer_map[new_exec_grad->dtype()]->AddTensor(new_exec_grad);
+        accumulate_grad_buffer_map[new_exec_grad->dtype()]->AddTensor(new_exec_grad);
+        new_exec_grad->set_placement(local_device);
+        HT_LOG_TRACE << "local grad " << new_exec_grad << " ds union = " << new_exec_grad->cur_ds_union().ds_union_info();
+      }
+      grad_map[exec_param->id()] = new_exec_grad;
+      // 创建并添加到对应param的subgraph中
+      std::shared_ptr<SubGraph> define_subgraph = GetSubGraph(param->producer());
+      HT_ASSERT(define_subgraph != nullptr)
+        << param << " is not placed in any define subgraph";
+      std::shared_ptr<SubGraph> bridge_subgraph = exec_graph->MakeSubGraph(SubGraphType::COMPUTE_OPTIMIZE_BRIDGE,
+                                                                           define_subgraph->global_name() + "." + param->producer()->name() + "_compute_optimize_bridge");
+      // 依次将所有的非bwd的op填加进入新的bridge graph
+      std::queue<Operator> update_ops;
+      update_ops.push(new_exec_grad->producer());
+      while (!update_ops.empty()) {
+        auto& cur_exec_op = update_ops.front();
+        // 只可能是comm op或者sum op
+        // 无外乎下面几种情况
+        // 1. compute_op -> (sum_op) -> update_op (local_group)
+        // 2. compute_op -> grad_reduce -> update_op (local_group)
+        // 3. compute_op -> sum_op -> grad_reduce -> update_op (local_group)
+        // 4. compute_op -> pipeline_send (group1)  pipeline_recv -> update_op (group2)
+        // 5. compute_op -> grad_reduce -> pipeline_send (group1)  pipeline_recv -> update_op (group2)
+        // 6. compute_op -> pipeline_send (group1)  pipeline_recv -> sum_op -> (grad_reduce) -> update_op (group2)
+        if (is_comm_op(cur_exec_op) || is_sum_op(cur_exec_op)) {
+          HT_ASSERT(exec_graph->GetSubGraph(cur_exec_op) == nullptr)
+            << cur_exec_op << " shouldn't belong to any subgraph"
+            << ", but found " << exec_graph->GetSubGraph(cur_exec_op)->global_name();
+          exec_graph->AddOpToSubGraph(cur_exec_op, bridge_subgraph->global_name(), SubGraphOpType::UPDATE);
+          for (const auto& cur_exec_input : cur_exec_op->inputs()) {
+            update_ops.push(cur_exec_input->producer());
+          }
+        } else {
+          HT_ASSERT(exec_graph->GetSubGraph(cur_exec_op) != nullptr && exec_graph->GetSubGraphOpType(cur_exec_op) == SubGraphOpType::BACKWARD)
+            << cur_exec_op << " should belong to a BACKWARD op";
+        }
+        update_ops.pop();
+      }
+      exec_graph->_compute_optimize_bridge_subgraph_map[exec_param->producer()->id()] = bridge_subgraph;
     }
 
     // 核心部分
@@ -777,22 +995,18 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
       */
       exec_graph->CUR_HETERO_ID = 0;
     }
+    // HT_LOG_INFO << "make exec op " << exec_op << " done";
     
-    std::shared_ptr<SubGraph> define_subgraph = GetSubGraph(op);
-    if (define_subgraph != nullptr) {
-      std::shared_ptr<SubGraph> exec_subgraph = exec_graph->MakeSubGraph(define_subgraph->subgraph_type(),
-                                                                         define_subgraph->name(),
-                                                                         define_subgraph->global_graph_name());
-      exec_graph->AddOpToSubGraph(exec_op, exec_subgraph->global_graph_name(), 
-                                  GetSubGraphType(op));
+    if (exec_subgraph != nullptr) {
+      exec_graph->AddOpToSubGraph(exec_op, exec_subgraph->global_name(), GetSubGraphOpType(op));
+      // HT_LOG_INFO << exec_op << " added to exec subgraph " << exec_subgraph->global_name() << " with op type " << static_cast<int32_t>(GetSubGraphOpType(op)); 
     }
 
     // 后处理
     // 1、建立op和exec_op的映射
     // 2、给op和输出的tensor分配placement group union
     // 3、设置tensor的shape和ds_hierarchy
-    // 4、标记param/optvar并给即将创建的exec graph预先设置ParamBuffer
-    // 5、给grad设置placement和buffer
+    // 4、标记param/optvar
     op_to_exec_op_mapping[op->id()] = exec_op;
     exec_op->MapToParallelDevices(pg_union);
     /*
@@ -822,35 +1036,12 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
     if (_optimizer_variable_ops.find(op->id()) != _optimizer_variable_ops.end()) {
       Graph::MarkAsOptimizerVariable(exec_op);
     }
-    if (is_optimizer_update_op(exec_op)) {
-      Tensor& param = op->input(0);
-      Tensor& exec_param = exec_op->input(0);
-      Tensor& exec_grad = exec_op->input(1);
-      HT_ASSERT(exec_graph->_parameter_ops.find(exec_param->producer()->id()) != exec_graph->_parameter_ops.end())
-        << "optimizer op " << exec_op << " input 0 " << exec_param << " is not a parameter";
-      // zero属性已经类似multi_ds一样设置成了list
-      /*
-      auto zero = (param->get_distributed_states().get_dim(-1) > 1) && param->get_distributed_states().zero();
-      auto adam_op_interface = std::dynamic_pointer_cast<AdamOpImpl>(exec_op->_body);
-      if (adam_op_interface) {
-        adam_op_interface->set_zero(zero);
-      }
-      */
-      // 热切换接口需要提前设置一些grad的信息
-      exec_grad->producer()->set_device_group_hierarchy(exec_param->producer()->device_group_hierarchy());
-      if (exec_grad->producer()->placement_group_union().has(local_device)) {
-        // current_grad_buffer->AddTensor(exec_grad);
-        // accumulate_grad_buffer->AddTensor(exec_grad);
-        // TODO: better compatibility with hot switch and quantization
-        current_grad_buffer_map[exec_grad->dtype()]->AddTensor(exec_grad);
-        accumulate_grad_buffer_map[exec_grad->dtype()]->AddTensor(exec_grad);
-        exec_grad->set_placement(local_device);
-        HT_LOG_TRACE << "local grad " << exec_grad << " ds union = " << exec_grad->cur_ds_union().ds_union_info();
-      }
-      grad_map[exec_param->id()] = exec_grad;
-    }
     HT_LOG_TRACE << "Creating an executable version of op " << op << " end...";
   }
+
+  // sort the subgraphs
+  exec_graph->SortOptimizeComputeBridgeSubgraph();
+  exec_graph->SortComputeOptimizeBridgeSubgraph();
 
   // assign fw_op_id map
   for (auto& op_ref : deq_global_topo) {
@@ -887,7 +1078,8 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
                                      std::move(tensor_to_exec_tensor_mapping),
                                      std::move(deq_global_topo),
                                      std::vector<Tensor2ShapeMap>{std::move(shape_plan)},
-                                     CUR_STRATEGY_ID);
+                                     COMPUTE_STRATEGY_ID,
+                                     OPTIMIZE_STRATEGY_ID);
 
   Graph::pop_graph_ctx();
   // HT_LOG_WARN << "Instantiating end";
@@ -911,10 +1103,12 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
 // 即允许feed_dict的shape（包括batch_size以及seq_len等）可变
 NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches,
                                    const FeedDict& feed_dict, const int num_micro_batches,
-                                   const int cur_strategy_id, RunLevel run_level,
+                                   const int compute_strategy_id, const int optimize_strategy_id, RunLevel run_level,
                                    bool save_checkpoint, const double grad_scale) {
   _run_level = run_level;
-  CUR_STRATEGY_ID = static_cast<size_t>(cur_strategy_id);
+  COMPUTE_STRATEGY_ID = static_cast<size_t>(compute_strategy_id);
+  OPTIMIZE_STRATEGY_ID = static_cast<size_t>(optimize_strategy_id);
+  CUR_STRATEGY_ID = static_cast<size_t>(compute_strategy_id);
   auto local_device = hetu::impl::comm::GetLocalDevice(); // only for debug use
   HT_LOG_DEBUG << local_device << ": [Graph Plan] obtain exec graph begin...";
 
@@ -946,7 +1140,8 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
     const auto& exec_graph_plan = _exec_graph_plan_pool[i];
     bool exec_plan_matched = true;
     // 先看strategy匹配不
-    if (static_cast<size_t>(cur_strategy_id) != exec_graph_plan.strategy_id) {
+    if (static_cast<size_t>(compute_strategy_id) != exec_graph_plan.compute_strategy_id
+        || static_cast<size_t>(optimize_strategy_id) != exec_graph_plan.optimize_strategy_id) {
       exec_plan_matched = false;
     }
     // 再看fetch匹配不
@@ -1067,9 +1262,53 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
     }
   }
 
+  // 准备运行挑选出的active exec graph
+  auto& exec_graph = _exec_graph_plan_pool[next_active_exec_plan].exec_graph;
+  auto& op_to_exec_op_mapping = _exec_graph_plan_pool[next_active_exec_plan].op_to_exec_op_mapping;
+  auto& tensor_to_exec_tensor_mapping = _exec_graph_plan_pool[next_active_exec_plan].tensor_to_exec_tensor_mapping;
+  auto& exec_loss = tensor_to_exec_tensor_mapping[loss->id()]; 
+  TensorList exec_fetches;
+  FeedDict exec_feed_dict;
+
+  // 设置shape plan
+  HT_LOG_DEBUG << exec_graph->name() << " use shape plan " << next_active_shape_plan_list;
+  exec_graph->SetShapePlan(next_active_shape_plan_list[0]);
+  exec_graph->SetShapePlanList(std::move(next_active_shape_plan_list));
+
+  exec_fetches.reserve(fetches.size());
+  for (const auto& fetch : fetches) {
+    HT_ASSERT(tensor_to_exec_tensor_mapping.find(fetch->id()) != tensor_to_exec_tensor_mapping.end())
+      << "can't find fetch tensor " << fetch << " in the mapping";
+    exec_fetches.push_back(tensor_to_exec_tensor_mapping[fetch->id()]);
+  }
+  exec_feed_dict.reserve(feed_dict.size());
+  for (const auto& kv : feed_dict) {
+    if (tensor_to_exec_tensor_mapping.find(kv.first) == tensor_to_exec_tensor_mapping.end()) {
+      HT_LOG_DEBUG << "feed tensor " << kv.first << " is not used in the exec graph"
+        << ", so we just skipped it";
+      continue;
+    }
+    exec_feed_dict[tensor_to_exec_tensor_mapping[kv.first]->id()] = kv.second;
+  }
+
+  // 2024.10.4 Update
+  // 这里先将exec graph的topo运行出来
+  // 包括substitute各种comm op以及修正各种mapping
+  // 方便后面的热切换
+  if (exec_graph->NeedRank(hetu::impl::comm::DeviceToWorldRank(local_device))) {
+    Graph::push_graph_ctx(exec_graph->id()); // 防止exec graph run内部MakeOp时忘记加
+    exec_graph->Run(exec_loss, exec_fetches, 
+                    exec_feed_dict, num_micro_batches, 
+                    RunLevel::TOPO, grad_scale);
+    Graph::pop_graph_ctx();
+  }
+
+  bool is_transfer_param_hot_switch = false;
   // 需要切换exec graph
-  if (save_checkpoint) // 存储param时不需要热切换
+  if (save_checkpoint) {
+    // 存储param时不需要热切换
     _is_active = false;
+  }
   if (!_is_active || _active_exec_plan != next_active_exec_plan) {
     HT_LOG_DEBUG << local_device << ": [Graph Plan] Context switch to the new exec plan begin...";
     // 热切换
@@ -1082,8 +1321,8 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
         for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
           DataType dtype = static_cast<DataType>(i);
           _param_and_opt_var_bucket_switcher_pool[key][dtype] = std::vector<std::shared_ptr<SwitchExecGraph>>();
-          _param_switcher_pool[key][dtype] = std::make_shared<SwitchExecGraph>(this, _active_exec_plan, next_active_exec_plan, dtype);
-          _grad_switcher_pool[key][dtype] = std::make_shared<SwitchExecGraph>(this, _active_exec_plan, next_active_exec_plan, dtype);
+          _param_switcher_pool[key][dtype] = std::make_shared<SwitchExecGraph>(this, _active_exec_plan, next_active_exec_plan, dtype, -1, std::unordered_set<Device>{}, std::unordered_map<DataType, DataType>{{DataType::BFLOAT16, DataType::FLOAT32}});
+          _grad_switcher_pool[key][dtype] = std::make_shared<SwitchExecGraph>(this, _active_exec_plan, next_active_exec_plan, dtype, -1, std::unordered_set<Device>{}, std::unordered_map<DataType, DataType>{{DataType::BFLOAT16, DataType::FLOAT32}});
         }
       }
       // 旧的exec graph
@@ -1224,6 +1463,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
           DataType dtype = static_cast<DataType>(i);
           _param_switcher_pool[key][dtype]->SwitchParams(param_switch_mode, param_switch_level, "switch transfer params " + DataType2Str(dtype));
         }
+        is_transfer_param_hot_switch = true;
       }
       // 按buckets的顺序进行switch
       else {
@@ -1239,7 +1479,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
               comm_set.emplace(device);
             }
             for (int32_t bucket_num = 0; bucket_num < buckets_size; bucket_num++) {
-              _param_and_opt_var_bucket_switcher_pool[key][dtype].emplace_back(std::make_shared<SwitchExecGraph>(this, _active_exec_plan, next_active_exec_plan, dtype, bucket_num, comm_set));
+              _param_and_opt_var_bucket_switcher_pool[key][dtype].emplace_back(std::make_shared<SwitchExecGraph>(this, _active_exec_plan, next_active_exec_plan, dtype, bucket_num, comm_set, std::unordered_map<DataType, DataType>{{DataType::FLOAT32, DataType::FLOAT32}}));
             }
           }
           // 实际bucket热切换
@@ -1287,44 +1527,18 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
     }
   }
 
-  // 运行挑选出的active exec graph
-  auto& exec_graph = _exec_graph_plan_pool[_active_exec_plan].exec_graph;
-  auto& op_to_exec_op_mapping = _exec_graph_plan_pool[_active_exec_plan].op_to_exec_op_mapping;
-  auto& tensor_to_exec_tensor_mapping = _exec_graph_plan_pool[_active_exec_plan].tensor_to_exec_tensor_mapping;
-  auto& exec_loss = tensor_to_exec_tensor_mapping[loss->id()]; 
-  TensorList exec_fetches;
-  FeedDict exec_feed_dict;
-
-  // 设置shape plan
-  HT_LOG_DEBUG << exec_graph->name() << " use shape plan " << next_active_shape_plan_list;
-  exec_graph->SetShapePlan(next_active_shape_plan_list[0]);
-  exec_graph->SetShapePlanList(std::move(next_active_shape_plan_list));
-
-  exec_fetches.reserve(fetches.size());
-  for (const auto& fetch : fetches) {
-    HT_ASSERT(tensor_to_exec_tensor_mapping.find(fetch->id()) != tensor_to_exec_tensor_mapping.end())
-      << "can't find fetch tensor " << fetch << " in the mapping";
-    exec_fetches.push_back(tensor_to_exec_tensor_mapping[fetch->id()]);
-  }
-  exec_feed_dict.reserve(feed_dict.size());
-  for (const auto& kv : feed_dict) {
-    if (tensor_to_exec_tensor_mapping.find(kv.first) == tensor_to_exec_tensor_mapping.end()) {
-      HT_LOG_DEBUG << "feed tensor " << kv.first << " is not used in the exec graph"
-        << ", so we just skipped it";
-      continue;
-    }
-    exec_feed_dict[tensor_to_exec_tensor_mapping[kv.first]->id()] = kv.second;
-  }
+  // 实际运行（可能发生在热切换后）
   // 验证mempool是否能释放干净
   // GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " before empty cache");
   // hetu::impl::ProfileAfterEmptyAllCUDACache(local_device);
   HT_LOG_DEBUG << exec_graph->name() << " start running..." ;
+  exec_graph->_is_transfer_param_hot_switch = is_transfer_param_hot_switch;
   NDArrayList ret;
-  exec_graph->SetRunLevel(run_level);
   if (exec_graph->NeedRank(hetu::impl::comm::DeviceToWorldRank(local_device))) {
     Graph::push_graph_ctx(exec_graph->id()); // 防止exec graph run内部MakeOp时忘记加
-    ret = exec_graph->Run(exec_loss, exec_fetches, exec_feed_dict, num_micro_batches, 
-                          cur_strategy_id, run_level, grad_scale);
+    ret = exec_graph->Run(exec_loss, exec_fetches, 
+                          exec_feed_dict, num_micro_batches, 
+                          run_level, grad_scale);
     Graph::pop_graph_ctx();
   }
   // 释放graph切换相关的event

@@ -1,6 +1,6 @@
 import json
 import fcntl
-import os
+import math
 
 GPUS_PER_NODE = 8
 
@@ -27,6 +27,31 @@ def write_with_lock(file_path, data):
 # 注意tp_pp_list默认按照tp从大到小的顺序
 def convert_strategy(tp_pp_list, ngpus, layers):
     dp = len(tp_pp_list)
+    # workaround: 单节点只使用一部分GPU
+    if ngpus < GPUS_PER_NODE:
+        # 直接按顺序分配即可
+        layers_tp_groups = [] # 记录每个layer所在的所有的tp组
+        gpu_pos = {} # 记录每个GPU的位置
+        for _ in range(layers):
+            layers_tp_groups.append([])
+        base_gpu = 0
+        for dp_id, tp_pp in enumerate(tp_pp_list):
+            tp = tp_pp[0]
+            pp = tp_pp[1]
+            for stage_id in range(pp):
+                cur_gpus = range(base_gpu, base_gpu + tp)
+                cur_layers = range(layers // pp * stage_id, layers // pp * (stage_id + 1))
+                for gpu in cur_gpus:
+                    gpu_pos[gpu] = GPUPos(dp_id, stage_id)
+                for layer in cur_layers:
+                    layers_tp_groups[layer].append(list(cur_gpus))  
+                base_gpu += tp 
+        assert base_gpu == ngpus, "all gpus should be used eventually"
+        for layer_tp_groups in layers_tp_groups:
+            assert len(layer_tp_groups) == dp, "length of tp group list should all be equal to dp degree"
+        return layers_tp_groups, gpu_pos
+    # 多节点
+    assert ngpus % GPUS_PER_NODE == 0, f"now only support using all gpus in a node (with {GPUS_PER_NODE} gpu each), but found ngpus = {ngpus}"
     nnodes = ngpus // GPUS_PER_NODE
     used_gpus = {} # 记录每个node有多少GPU被用到了
     layers_tp_groups = [] # 记录每个layer所在的所有的tp组
