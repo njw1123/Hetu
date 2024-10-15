@@ -1,12 +1,12 @@
 NUM_LAYERS=${1:-32}
-# HIDDEN_SIZE=${2:-4096}
-HIDDEN_SIZE=${2:-256}
+HIDDEN_SIZE=${2:-4096}
+# HIDDEN_SIZE=${2:-256}
 NUM_HEADS=${3:-32}
-SEQ_LEN=${4:-1024}
+SEQ_LEN=${4:-8192}
 GLOBAL_BATCH_SIZE=${5:-128}
 MICRO_BATCH_SIZE=${6:-1}
-# FFN_HIDDEN_SIZE=${7:-11008}
-FFN_HIDDEN_SIZE=${7:-2752}
+FFN_HIDDEN_SIZE=${7:-11008}
+# FFN_HIDDEN_SIZE=${7:-2752}
 SERVER_ADDR="172.24.10.109"
 # SERVER_ADDR="172.24.93.179" # worker-0
 # SERVER_ADDR=${8:-"127.0.0.1"} # 216
@@ -16,8 +16,18 @@ ENV_FILE_PATH=${11:-"./scripts/env_A100.sh"}
 
 # 注意目前属于同一CP的几条pipeline的layer与stage的划分以及recompute的layers必须一致
 # 否则会由于topo序和pipeline的scheduler不一致而出现死锁
-CASE=1
-if [[ ${CASE} -eq 1 ]]; then
+CASE=0
+if [[ ${CASE} -eq 0 ]]; then
+	# 单机同构
+	# setting 1
+	NUM_GPUS=16
+	DP=2
+	CP=1
+	TP=4
+	PP=2
+	HETERO=false
+	RECOMPUTE_LAYERS="[]"
+elif [[ ${CASE} -eq 1 ]]; then
 	# 单机同构
 	# setting 1
 	NUM_GPUS=8

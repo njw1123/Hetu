@@ -622,7 +622,7 @@
 
 - name: comm
   op: CommOp
-  args: Tensor input, DistributedStatesHierarchy dst_ds_hierarchy, DeviceGroupHierarchy dst_dg_hierarchy
+  args: Tensor input, DistributedStatesHierarchy dst_ds_hierarchy, DeviceGroupHierarchy dst_dg_hierarchy, bool is_pipeline_op=True
 
 - name: comm
   op: CommOp

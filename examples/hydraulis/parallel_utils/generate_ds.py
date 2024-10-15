@@ -1,6 +1,6 @@
 import json
 import fcntl
-import math
+import os
 
 GPUS_PER_NODE = 8
 
@@ -20,6 +20,8 @@ def write_with_lock(file_path, data):
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
             json.dump(data, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
         finally:
             # 释放文件锁
             fcntl.flock(f, fcntl.LOCK_UN)

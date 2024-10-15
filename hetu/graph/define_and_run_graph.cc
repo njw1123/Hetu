@@ -26,7 +26,7 @@ static std::shared_ptr<SubGraph> MakeExecSubgraph(std::shared_ptr<ExecutableGrap
   return exec_graph->MakeSubGraph(define_subgraph->subgraph_type(),
                                   define_subgraph->global_name(),
                                   false,
-                                  define_subgraph->module_type());
+                                  define_subgraph->subgraph_type() == SubGraphType::MODULE ? define_subgraph->module_type() : "");
 }
 
 Operator& DefineAndRunGraph::MakeOpInner(std::shared_ptr<OpInterface> body,
@@ -47,27 +47,9 @@ Operator& DefineAndRunGraph::MakeOpInner(std::shared_ptr<OpInterface> body,
   if (op->device_group_hierarchy().size() == NUM_STRATEGY) {
     _ops_with_device_group_hierarchy.emplace_back(op);
   } 
-  /*
-  // record the subgraph
-  // workaround: 暂时不把pipeline插入的comm op放到任何subgraph中
-  // 单独将其放在一个subgraph中
-  if (op->name().find("pipeline_layer") != std::string::npos) {
-    auto pipeline_layer_subgraph = MakeSubGraph(SubGraphType::PIPELINE, op->name(), true);
-    AddOpToSubGraph(op, pipeline_layer_subgraph->global_name());
-    return _op_indexing[op->id()];
-  }
-  */
   if (get_cur_subgraph_global_name() != "") {
     AddOpToSubGraph(op, get_cur_subgraph_global_name());
   }
-  /*
-  if (is_optimizer_update_op(op)) {
-    std::shared_ptr<SubGraph> subgraph = graph.GetSubGraph(op->input(0)->producer());
-    if (subgraph != nullptr) {
-      graph.AddOpToSubGraph(op, subgraph->global_name(), SubGraphOpType::UPDATE);
-    }
-  }
-  */
   return _op_indexing[op->id()];
 }
 
@@ -372,7 +354,8 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
     // 因为exec op已经具有placement group union
     // 因此可以得到local device对应的ds
     if (_parameter_ops.find(op->id()) != _parameter_ops.end()
-        || _optimizer_variable_ops.find(op->id()) != _optimizer_variable_ops.end()) {
+        || _optimizer_variable_ops.find(op->id()) != _optimizer_variable_ops.end()
+        || is_optimizer_update_op(op)) {
       CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
       exec_graph_plan.exec_graph->CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
     } else {
@@ -732,7 +715,8 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
     */
 
     if (_parameter_ops.find(op->id()) != _parameter_ops.end()
-        || _optimizer_variable_ops.find(op->id()) != _optimizer_variable_ops.end()) {
+        || _optimizer_variable_ops.find(op->id()) != _optimizer_variable_ops.end()
+        || is_optimizer_update_op(op)) {
       CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
       exec_graph->CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
     } else {
@@ -1459,6 +1443,12 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
           || param_switch_mode == SWITCH_MODE::SWITCH_ORIGIN_PARAM) {
         HT_ASSERT(param_switch_mode != SWITCH_MODE::SWITCH_ORIGIN_PARAM)
           << "SWITCH_MODE::SWITCH_ORIGIN_PARAM is currently deprecated";
+        /*
+        // 策略一样的情况下单独特判直接复用显存即可
+        if (param_switch_level == SWITCH_LEVEL::EXEC && old_exec_graph->COMPUTE_STRATEGY_ID == new_exec_graph->COMPUTE_STRATEGY_ID) {
+          param_switch_level = SWITCH_LEVEL::DIRECT_BIND;
+        }
+        */
         for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
           DataType dtype = static_cast<DataType>(i);
           _param_switcher_pool[key][dtype]->SwitchParams(param_switch_mode, param_switch_level, "switch transfer params " + DataType2Str(dtype));
@@ -1467,6 +1457,10 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
       }
       // 按buckets的顺序进行switch
       else {
+        // 策略一样的情况下单独特判直接复用显存即可
+        if (param_switch_level == SWITCH_LEVEL::EXEC && old_exec_graph->OPTIMIZE_STRATEGY_ID == new_exec_graph->OPTIMIZE_STRATEGY_ID) {
+          param_switch_level = SWITCH_LEVEL::DIRECT_BIND;
+        }
         for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
           DataType dtype = static_cast<DataType>(i);
           size_t buckets_size = old_exec_graph->_origin_param_and_optimizer_buckets_map[dtype]->buckets_size();
@@ -1485,7 +1479,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
           // 实际bucket热切换
           for (int32_t bucket_num = 0; bucket_num < buckets_size; bucket_num++) {
             _param_and_opt_var_bucket_switcher_pool[key][dtype][bucket_num]->SwitchParams(param_switch_mode, param_switch_level, "switch params and opt-states dtype " + DataType2Str(dtype) + " bucket " + std::to_string(bucket_num));
-        }
+          }
         }
         // old version w/o dtype (Malleus exp only)
         /*

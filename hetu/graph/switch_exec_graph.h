@@ -50,6 +50,7 @@ enum class SWITCH_MODE : int8_t {
 enum class SWITCH_LEVEL : int8_t {
   EXEC = 0,
   TOPO,
+  DIRECT_BIND
 };
 
 enum class P2P_ROUTE_LEVEL : int8_t {
@@ -270,6 +271,10 @@ class ParamBuckets {
 
     size_t buckets_size() {
       return _buckets_size;
+    }
+
+    const std::vector<std::shared_ptr<ParamBuffer>>& buckets() const {
+      return _buckets;
     }
 
     size_t GetSuggestedBucketId(const Tensor& tensor);
@@ -688,7 +693,7 @@ class ComplexExecComm : public SwitchExecGraph {
       _algorithm_level = SWITCH_ALGORITHM_LEVEL::NEW_GREEDY;
     }
 
-    Tensor Instantiate();
+    Tensor Instantiate(StreamIndex comm_stream_idx);
 
   protected:
     bool _is_instantiated;

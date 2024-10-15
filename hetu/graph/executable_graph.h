@@ -204,6 +204,11 @@ class ExecutableGraph : public Graph {
     }
   }
 
+  bool HasTensorShape(const Tensor& tensor) const {
+    const auto& shape_plan = _shape_plan_pool.at(_active_shape_plan);
+    return shape_plan.find(tensor->id()) != shape_plan.end();
+  }
+
   const HTShape& GetTensorShape(const Tensor& tensor) const {
     const auto& shape_plan = _shape_plan_pool.at(_active_shape_plan);
     auto it = shape_plan.find(tensor->id());

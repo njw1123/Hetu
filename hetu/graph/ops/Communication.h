@@ -211,7 +211,7 @@ Tensor MakeCommOp(Tensor input, DistributedStatesHierarchy dst_ds_hierarchy,
                   const std::string& mode, OpMeta op_meta = OpMeta());
 
 Tensor MakeCommOp(Tensor input, DistributedStatesHierarchy dst_ds_hierarchy, 
-                  DeviceGroupHierarchy dst_group_hierarchy, OpMeta op_meta = OpMeta());
+                  DeviceGroupHierarchy dst_group_hierarchy, bool is_pipeline_op=true, OpMeta op_meta = OpMeta());
 
 Tensor MakeCommOp(Tensor input, DistributedStatesHierarchy dst_ds_hierarchy, 
                   OpMeta op_meta = OpMeta());

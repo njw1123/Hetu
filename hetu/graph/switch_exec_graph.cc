@@ -1510,7 +1510,21 @@ void SwitchExecGraph::SwitchParams(SWITCH_MODE switch_mode,
   } else {
     HT_RUNTIME_ERROR << "NotImplementedError";
   }
-  if (switch_level != SWITCH_LEVEL::TOPO) {
+  if (switch_level == SWITCH_LEVEL::DIRECT_BIND) {
+    HT_ASSERT(switch_mode == SWITCH_MODE::SWITCH_ORIGIN_PARAM_AND_OPTIMIZER)
+      << "currently only support direct bind when switching origin param and opt var";
+    after_param_buffer->Bind(before_param_buffer->AsStorage());
+    before_param_buffer->Free();
+    _switch_graph_pair.first->_preserved_data.clear();
+    for (const auto& after_param : after_param_buffer->tensor_list()) {
+      auto after_param_data = NDArray(after_param->meta(),
+                                      after_param_buffer->AsStorage(), 
+                                      after_param_buffer->GetElementOffest(after_param));
+      _switch_graph_pair.second->_preserved_data[after_param->id()] = after_param_data;
+    }
+    return;
+  }
+  if (switch_level == SWITCH_LEVEL::EXEC) {
     HT_ASSERT(!after_param_buffer->IsAllocated())
       << "wrong allocation state for after buffer"
       << ", it shouldn't be allocated";
@@ -2052,11 +2066,10 @@ void SwitchExecGraph::ProfileRunningDetails() {
 }
 
 // support symbolic shape
-Tensor ComplexExecComm::Instantiate() {
+Tensor ComplexExecComm::Instantiate(StreamIndex comm_stream_idx) {
   if (_is_instantiated) {
     HT_RUNTIME_ERROR << "already inserted the repartition op";
   }
-  auto comm_stream_idx = kP2PStream;
   auto local_device = hetu::impl::comm::GetLocalDevice();
   const auto& src_hetero_dim = _comm_info.src_ds_union.hetero_dim();
   const auto& dst_hetero_dim = _comm_info.dst_ds_union.hetero_dim();
@@ -2081,10 +2094,16 @@ Tensor ComplexExecComm::Instantiate() {
     comm_input->init_symbolic_shape();
   }
   auto sy_global_shape = comm_input->symbolic_global_shape();
+  auto subgraph = _comm_op->graph().GetSubGraph(_comm_op);
+  HT_ASSERT(subgraph != nullptr)
+    << _comm_op << " doesn't belong to any subgraph, which shouldn't occur";
   // Malleus hetero cross stage pp op
   // 这里其实不需要特判
   // 但因为代码上的历史遗留原因这里仍保留之前的写法
-  if (src_hetero_dim == dst_hetero_dim && src_hetero_size == dst_hetero_size) {
+  if (subgraph->subgraph_type() == SubGraphType::PIPELINE) {
+    comm_stream_idx = kP2PStream;
+    HT_ASSERT(src_hetero_dim == dst_hetero_dim && src_hetero_size == dst_hetero_size)
+      << "hetero pp op should have the same hetero dim and same hetero size";
     if (src_hetero_dim >= 0) {
       sy_global_shape.at(src_hetero_dim) = sy_global_shape.at(src_hetero_dim) / src_hetero_size;
     }
@@ -2141,6 +2160,8 @@ Tensor ComplexExecComm::Instantiate() {
   }
   // Hydraulis hetero optimize-compute or compute-optimize bridge op
   else {
+    HT_ASSERT(subgraph->subgraph_type() == SubGraphType::OPTIMIZE_COMPUTE_BRIDGE || subgraph->subgraph_type() == SubGraphType::COMPUTE_OPTIMIZE_BRIDGE)
+      << "subgraph type should only be PIPELINE or BRIDGE";
     for (const auto& cur_src_ds : _comm_info.src_ds_union.raw_data()) {
       HT_ASSERT(cur_src_ds.states(-2) == 1)
         << "bridge op can't include reduction";

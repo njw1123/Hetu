@@ -152,8 +152,7 @@ uint64_t CommOpImpl::get_comm_type(Operator& op, const Device& inferred, const C
   // 2、hetero dim不一样
   else {
     // 2-1、不存在reduce
-    // 统一使用all to all
-    // TODO: split all gather或许会比all to all更快
+    // 使用all to all或者split all gather
     bool no_reduction = true;
     for (size_t i = 0; i < info.src_group_union.size(); i++) {
       if (info.src_ds_union.get(i).states(-2) != 1) {
@@ -168,7 +167,34 @@ uint64_t CommOpImpl::get_comm_type(Operator& op, const Device& inferred, const C
       }
     }
     if (no_reduction) {
-      _comm_type = BATCHED_ISEND_IRECV_OP;
+      // 看是否可以split all gather
+      // 条件还是比较苛刻的
+      bool can_split_all_gather = true;
+      if (info.src_group_union.check_equal(info.dst_group_union)
+          && info.src_ds_union.hetero_dim() == 0 
+          && !info.src_ds_union.split_pattern().is_contiguous()
+          && info.dst_ds_union.hetero_dim() == -1
+          && info.dst_ds_union.split_pattern().is_contiguous()) {
+        size_t size = info.src_group_union.size();
+        for (size_t i = 0; i < size; i++) {
+          auto src_local_ds = info.src_ds_union.get_local(i);
+          auto dst_local_ds = info.dst_ds_union.get_local(i);
+          if (!src_local_ds.check_equal(dst_local_ds)) {
+            HT_LOG_TRACE << op << " cannot leverage split all gather optimization because " << i << " local ds not equal: "
+              << src_local_ds.ds_info() << " vs " << dst_local_ds.ds_info();
+            can_split_all_gather = false;
+            break;
+          }
+        }
+      } else {
+        HT_LOG_TRACE << op << " cannot leverage split all gather optimization";
+        can_split_all_gather = false;
+      }
+      if (can_split_all_gather) {
+        _comm_type = SPLIT_ALL_GATHER_OP;
+      } else {
+        _comm_type = BATCHED_ISEND_IRECV_OP;
+      }
       return _comm_type;
     }
     // 2-2、存在reduce
@@ -1238,11 +1264,19 @@ Tensor MakeCommOp(Tensor input, DistributedStatesHierarchy dst_ds_hierarchy,
                       {input}, std::move(op_meta))->output(0);
 }
 
-Tensor MakeCommOp(Tensor input, DistributedStatesHierarchy dst_ds_hierarchy, DeviceGroupHierarchy dst_group_hierarchy, OpMeta op_meta) {
+Tensor MakeCommOp(Tensor input, DistributedStatesHierarchy dst_ds_hierarchy, DeviceGroupHierarchy dst_group_hierarchy, bool is_pipeline_op, OpMeta op_meta) {
   HT_ASSERT(op_meta.device_group_hierarchy.size() == 0)
     << "MakeCommOp mustn't use device group hierarchy, please use its official attribute (dst group hierarchy) instead to avoid chaos";
-  return Graph::MakeOp(std::make_shared<CommOpImpl>(std::move(dst_ds_hierarchy), std::move(dst_group_hierarchy)), 
-                      {input}, std::move(op_meta))->output(0);
+  auto& op = Graph::MakeOp(std::make_shared<CommOpImpl>(std::move(dst_ds_hierarchy), std::move(dst_group_hierarchy)), 
+                           {input}, std::move(op_meta));
+  // record the subgraph
+  // 单独将其放在一个subgraph中
+  if (is_pipeline_op) {
+    op->graph().DeleteOpFromSubGraph(op);
+    auto pipeline_layer_subgraph = op->graph().MakeSubGraph(SubGraphType::PIPELINE, op->name(), true);
+    op->graph().AddOpToSubGraph(op, pipeline_layer_subgraph->global_name());
+  }
+  return op->output(0);
 }
 
 Tensor MakeCommOp(Tensor input, DistributedStatesHierarchy dst_ds_hierarchy, OpMeta op_meta) {

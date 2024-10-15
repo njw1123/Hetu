@@ -89,6 +89,7 @@ def pretrain(args):
         multi_gpu_pos.append(gpu_pos)
         multi_config_file_path.append(config_file_path)
     
+    ht.global_comm_barrier() 
     ds_parallel_configs = read_ds_parallel_config(",".join(multi_config_file_path), num_strategy)
     config = LLaMAConfig(
         vocab_size=args.vocab_size, 
@@ -175,7 +176,8 @@ def pretrain(args):
     def hetu_train(
         feed_dict,
         num_micro_batches,
-        strategy_id
+        compute_strategy_id,
+        optimize_strategy_id
     ):
         try:
             results = train_op.graph.run(
@@ -183,8 +185,8 @@ def pretrain(args):
                 [loss, train_op], 
                 feed_dict=feed_dict, 
                 num_micro_batches=num_micro_batches, 
-                compute_strategy_id=strategy_id,
-                optimize_strategy_id=strategy_id,
+                compute_strategy_id=compute_strategy_id,
+                optimize_strategy_id=optimize_strategy_id,
                 run_level = ht.run_level("update")
             )
         except RuntimeError as e:
@@ -198,7 +200,8 @@ def pretrain(args):
     def run_plan(
         epoch = 0,
         consumed_samples = 0,
-        strategy_id = 0,
+        compute_strategy_id = 0,
+        optimize_strategy_id = 0,
         warm_up = False,
         batching_method = 4, 
         max_padded_seqlen = None,
@@ -264,7 +267,7 @@ def pretrain(args):
                 }
                 for i in range(config.n_layer):
                     feed_dict[config.cu_seqlens_list[i]] = packed_cu_seqlens_list
-                hetu_train(feed_dict, num_micro_batches, strategy_id)
+                hetu_train(feed_dict, num_micro_batches, compute_strategy_id, optimize_strategy_id)
                 print(f"{local_device}: warm up end")
                 return
             else:
@@ -340,7 +343,7 @@ def pretrain(args):
                 for i in range(config.n_layer):
                     feed_dict[config.cu_seqlens_list[i]] = [x.astype(np.int32) for x in cu_seqlens_list]
             start_time = time.time()
-            results = hetu_train(feed_dict, len(input_batch), strategy_id)
+            results = hetu_train(feed_dict, len(input_batch), compute_strategy_id, optimize_strategy_id)
             end_time = time.time()
             consumed_samples += args.global_batch_size
             # 如果在pipeline的最后一个stage上那么就打印loss
@@ -350,25 +353,32 @@ def pretrain(args):
         return consumed_samples
     
     # 运行
-    def test(): 
+    def test(
+        compute_strategy_id=0,
+        optimize_strategy_id=0
+    ): 
         run_plan(
             warm_up=True, 
             batching_method=args.batching_method,
-            max_padded_seqlen=args.max_seq_len
+            max_padded_seqlen=args.max_seq_len,
+            compute_strategy_id=compute_strategy_id,
+            optimize_strategy_id=optimize_strategy_id
         )
-        strategy_id = 0
         for epoch in range(args.epochs):
             consumed_samples = 0 # should be reset when run next epoch
             consumed_samples = run_plan(
                 epoch=epoch, 
                 consumed_samples=consumed_samples,
-                strategy_id=strategy_id,
+                compute_strategy_id=compute_strategy_id,
+                optimize_strategy_id=optimize_strategy_id,
                 batching_method=args.batching_method,
                 max_padded_seqlen=args.max_seq_len,
                 fake_seqlens=ast.literal_eval(args.fake_seqlens)
             )
     
-    test()
+    compute_strategy_id = len(args.multi_tp_pp_list) - 1
+    optimize_strategy_id = 0
+    test(compute_strategy_id=compute_strategy_id, optimize_strategy_id=optimize_strategy_id)
 
 if __name__ == '__main__':
     print("Run hetu training")

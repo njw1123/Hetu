@@ -1,7 +1,7 @@
 NUM_LAYERS=${1:-32}
-# HIDDEN_SIZE=${2:-4096}
+HIDDEN_SIZE=${2:-4096}
 HIDDEN_SIZE=${2:-256}
-# FFN_HIDDEN_SIZE=${3:-11008}
+FFN_HIDDEN_SIZE=${3:-11008}
 FFN_HIDDEN_SIZE=${3:-2752}
 NUM_HEADS=${4:-32}
 GLOBAL_BATCH_SIZE=${5:-128}
@@ -16,8 +16,9 @@ ENV_FILE_PATH=${10:-"./scripts/env_A100.sh"}
 CASE=0
 if [[ ${CASE} -eq 0 ]]; then
 	# test
-	NUM_GPUS=2
-	MULTI_TP_PP_LIST="[[(1, 1), (1, 1)], ]"
+	NUM_GPUS=8
+	# MULTI_TP_PP_LIST="[[(2, 2), (1, 4),], ]"
+	MULTI_TP_PP_LIST="[[(2, 2), (2, 2)], [(4, 1), (1, 4)]]"
 	BATCHING_METHOD=0
 elif [[ ${CASE} -eq 1 ]]; then
 	# homo + greedy packing with static shape

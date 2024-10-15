@@ -345,6 +345,13 @@ TensorList Graph::Gradients(const TensorList& ys, const TensorList& xs,
             OpMeta().set_name("workaround_share_weight_grad_inter_comm")); // inter group op
           grad_outputs.at(0)->set_is_grad(true);
           grad_outputs.at(0)->producer()->set_fw_op_id(op->id());
+          auto& cur_graph = op->graph();
+          std::shared_ptr<SubGraph> subgraph = cur_graph.GetSubGraph(op);
+          if (subgraph != nullptr) {
+            cur_graph.AddOpToSubGraph(grad_outputs.at(0)->producer(), 
+                                      subgraph->global_name(), 
+                                      SubGraphOpType::BACKWARD);
+          }
           // 2、make intra comm op
           // SplitAllReduce/SplitReduceScatter
           // 将partial再都转化为dup（SplitAllReduce）或者split0（SplitReduceScatter）
