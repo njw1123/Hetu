@@ -29,6 +29,13 @@ static std::shared_ptr<SubGraph> MakeExecSubgraph(std::shared_ptr<ExecutableGrap
                                   define_subgraph->subgraph_type() == SubGraphType::MODULE ? define_subgraph->module_type() : "");
 }
 
+bool DefineAndRunGraph::use_optimizer_strategy(Operator& op) const {
+  return _parameter_ops.find(op->id()) != _parameter_ops.end()
+         || _optimizer_variable_ops.find(op->id()) != _optimizer_variable_ops.end()
+         || is_optimizer_update_op(op)
+         || is_group_op(op);
+}
+
 Operator& DefineAndRunGraph::MakeOpInner(std::shared_ptr<OpInterface> body,
                                          TensorList inputs, OpMeta op_meta) {
   _check_all_inputs_in_graph(inputs, op_meta.extra_deps);
@@ -94,7 +101,7 @@ NDArray DefineAndRunGraph::GetDetachedVariableDataInner(const Tensor& tensor) {
       return ret;
     } else {
       // The op has been instantiated in the current active graph. Let the executable graph handle it.
-      if (!it_1->second->producer()->placement_group_union().has(impl::comm::GetLocalDevice())) {
+      if (!it_1->second->placement_group_union().has(impl::comm::GetLocalDevice())) {
         HT_LOG_TRACE << "The data is not locate at local executable graph, return an empty NDArray.";
         return NDArray::empty(tensor->shape(), Device(kCPU), tensor->dtype(), kBlockingStream);
       }
@@ -279,7 +286,7 @@ void DefineAndRunGraph::DeducePipeline(size_t compute_strategy_id, int32_t pipel
   // 获取当前device推荐的hetero id
   auto it = device_to_pipeline_idx_map.find(hetu::impl::comm::GetLocalDevice());
   if (it != device_to_pipeline_idx_map.end()) {
-    SUGGESTED_HETERO_ID = it->second;
+    COMPUTE_SUGGESTED_HETERO_ID = it->second;
   }
   CUR_STRATEGY_ID = old_strategy_id;
 }
@@ -330,7 +337,6 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
     input_shapes.reserve(op->num_inputs());
     for (size_t i = 0; i < op->num_inputs(); i++) {
       const auto& input = op->input(i);
-      const auto& exec_input = exec_op->input(i);
       auto it = shape_plan.find(input->id());
       HT_ASSERT(it != shape_plan.end()) 
         << "Something wrong, can't find the input shape from the current shape plan"
@@ -342,20 +348,22 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
         auto before_zero_it = _ds_hierarchy_before_zero.find(input->id());
         HT_ASSERT(before_zero_it != _ds_hierarchy_before_zero.end())
           << "cannot find " << input << " ds hierarchy before zero";
+        auto transfer_param_it = exec_graph_plan.exec_graph->_transfer_map.find(exec_graph_plan.op_to_exec_op_mapping[input->producer()->id()]->id());
+        HT_ASSERT(transfer_param_it != exec_graph_plan.exec_graph->_transfer_map.end())
+          << "can't find the final transfer param of " << exec_graph_plan.op_to_exec_op_mapping[input->producer()->id()];
         const auto& global_shape = dynamic_cast<ParallelVariableOpImpl&>(input->producer()->body()).global_shape();
-        auto& cur_ds = before_zero_it->second.get(COMPUTE_STRATEGY_ID).get(exec_input->producer()->inferred_local_placement_group_idx());
+        auto& cur_ds = before_zero_it->second.get(COMPUTE_STRATEGY_ID).get(transfer_param_it->second->inferred_local_placement_group_idx());
         for (size_t d = 0; d < input_shape.size(); d++) {
           input_shape.at(d) = global_shape.at(d) / cur_ds.get_dim(d);
         } 
       }
+      // HT_LOG_INFO << input << " shape is " << input_shape;
       input_shapes.push_back(input_shape);
     }
     // 使用exec op的InferShape而不是op的InferShape
     // 因为exec op已经具有placement group union
     // 因此可以得到local device对应的ds
-    if (_parameter_ops.find(op->id()) != _parameter_ops.end()
-        || _optimizer_variable_ops.find(op->id()) != _optimizer_variable_ops.end()
-        || is_optimizer_update_op(op)) {
+    if (use_optimizer_strategy(op)) {
       CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
       exec_graph_plan.exec_graph->CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
     } else {
@@ -363,7 +371,7 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
       exec_graph_plan.exec_graph->CUR_STRATEGY_ID = COMPUTE_STRATEGY_ID;
     }
     HTShapeList exec_output_shapes = exec_op->InferShape(input_shapes, runtime_ctx);
-    // HT_LOG_INFO << exec_op << " output shapes are " << exec_output_shapes;
+    // HT_LOG_INFO << exec_op << " input shapes are " << input_shapes << " and output shapes are " << exec_output_shapes;
     auto exec_output_shapes_size = exec_output_shapes.size();
     for (size_t i = 0; i < exec_output_shapes_size; i++) {
       // 设置symbolic shape叶子节点的shape
@@ -414,6 +422,12 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
       exec_input_shapes.push_back(it->second);
     }
     HTShapeList exec_output_shapes = exec_op->InferShape(exec_input_shapes, runtime_ctx);
+    // HT_LOG_INFO << "extra exec op " << exec_op << " output shapes are " << exec_output_shapes;
+    /*
+    if (is_batched_isend_irecv_op(exec_op) && exec_op->num_inputs() == 0) {
+      HT_LOG_INFO << exec_op << " is no-send batched-isend-irecv op, the in dep linkers are " << exec_op->in_dep_linkers();
+    }
+    */
     auto exec_output_shapes_size = exec_output_shapes.size();
     for (size_t i = 0; i < exec_output_shapes_size; i++) {
       if (exec_op->output(i)->symbolic()) {
@@ -616,8 +630,8 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
   std::sort(used_ranks.begin(), used_ranks.end());
   // HT_LOG_WARN << "used ranks = " << used_ranks;
   exec_graph->SetUsedRanks(used_ranks);
-  exec_graph->SUGGESTED_HETERO_ID = SUGGESTED_HETERO_ID;
-  SUGGESTED_HETERO_ID = 0;
+  exec_graph->COMPUTE_SUGGESTED_HETERO_ID = COMPUTE_SUGGESTED_HETERO_ID;
+  COMPUTE_SUGGESTED_HETERO_ID = 0;
 
   auto get_exec_input = [&](const Tensor& input) -> Tensor {
     auto it = tensor_to_exec_tensor_mapping.find(input->id());
@@ -673,7 +687,7 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
     // 目前只是记录而并不会alloc
     if (((_parameter_ops.find(tensor->producer()->id()) != _parameter_ops.end() && tensor->requires_grad())
          || _optimizer_variable_ops.find(tensor->producer()->id()) != _optimizer_variable_ops.end())
-        && exec_tensor->producer()->placement_group_union().has(local_device)) {
+        && exec_tensor->placement_group_union().has(local_device)) {
       // origin_param_and_optimizer_buffer->AddTensor(exec_tensor); // deprecated
       // origin_param_and_optimizer_buckets->AddTensor(exec_tensor);
       // TODO: better compatibility with hot switch and quantization
@@ -714,9 +728,7 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
     HT_LOG_INFO << "Exec op " << op << " with inputs " << exec_inputs << " and shapes " << exec_input_shapes;
     */
 
-    if (_parameter_ops.find(op->id()) != _parameter_ops.end()
-        || _optimizer_variable_ops.find(op->id()) != _optimizer_variable_ops.end()
-        || is_optimizer_update_op(op)) {
+    if (use_optimizer_strategy(op)) {
       CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
       exec_graph->CUR_STRATEGY_ID = OPTIMIZE_STRATEGY_ID;
     } else {
@@ -775,6 +787,7 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
                   Tensor absmax = dequantization_tensor_map[tensor_id];
                   auto& exec_op = Graph::MakeOp(std::make_shared<DeQuantizationOpImpl>(datatype, blocksize),
                                   {exec_inputs[i], absmax}, OpMeta().set(op->op_meta()), *exec_graph);
+                  exec_op->set_suggested_hetero_id(0);
                   exec_op->MapToParallelDevices(exec_inputs[i]->placement_group_union());
                   // we have to set the exec shape plan manually before the initialization of the plan
                   exec_shape_plan[exec_op->output(0)->id()] = exec_op->output(0)->shape();
@@ -798,6 +811,7 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
                                     {exec_inputs[i]}, OpMeta().set(exec_inputs[i]->producer()->op_meta()).set_name(exec_inputs[i]->producer()->name() + "_transfer").set_is_deduce_states(false), *exec_graph);
                     HT_LOG_DEBUG << exec_op << " ds union is " << exec_inputs[i]->cur_ds_union().ds_union_info()
                       << " and pg union is " << exec_inputs[i]->placement_group_union();
+                    exec_op->set_suggested_hetero_id(0);
                     exec_op->MapToParallelDevices(exec_inputs[i]->placement_group_union());
                     // we have to set the exec shape plan manually before the initialization of the plan
                     exec_shape_plan[exec_op->output(0)->id()] = exec_op->output(0)->shape();
@@ -819,10 +833,8 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
                       auto& transfer_param_pg_union = op->input(i)->producer()->device_group_hierarchy().get(COMPUTE_STRATEGY_ID);
                       if (transfer_param_pg_union.has(local_device)) {
                         exec_graph->CUR_HETERO_ID = transfer_param_pg_union.get_index(local_device);
-                      } else if (exec_op->output(0)->placement_group_union().has(local_device)) {
-                        exec_graph->CUR_HETERO_ID = exec_op->output(0)->placement_group_union().get_index(local_device);
                       } else {
-                        exec_graph->CUR_HETERO_ID = exec_graph->SUGGESTED_HETERO_ID;
+                        exec_graph->CUR_HETERO_ID = exec_graph->COMPUTE_SUGGESTED_HETERO_ID;
                       }
                       auto& exec_comm_op = Graph::MakeOp(std::make_shared<CommOpImpl>(
                                            DistributedStatesHierarchy{{transfer_param_ds_union}}, 
@@ -880,14 +892,15 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
       // 将exec_grad往exec_param的形式上去转
       if (exec_param->placement_group_union().has(local_device)) {
         exec_graph->CUR_HETERO_ID = exec_param->placement_group_union().get_index(local_device);
-      } else if (exec_grad->placement_group_union().has(local_device)) {
-        exec_graph->CUR_HETERO_ID = exec_grad->placement_group_union().get_index(local_device);
       } else {
-        exec_graph->CUR_HETERO_ID = exec_graph->SUGGESTED_HETERO_ID;
+        exec_graph->CUR_HETERO_ID = 0;
       }
       auto& exec_comm_op = Graph::MakeOp(std::make_shared<CommOpImpl>(DistributedStatesHierarchy{{exec_param->cur_ds_union()}}, DeviceGroupHierarchy{{exec_param->placement_group_union()}}),
                            {exec_grad}, OpMeta().set_name(exec_grad->producer()->name() + "_bridge").set_is_deduce_states(false), *exec_graph);
       exec_graph->CUR_HETERO_ID = 0;
+      // 需要修正
+      // non-local的optimizer相关的op全部使用hetero id为0的策略
+      exec_comm_op->set_suggested_hetero_id(0);
       exec_comm_op->MapToParallelDevices(exec_param->placement_group_union());
       // we have to set the exec shape plan manually before the initialization of the plan
       exec_shape_plan[exec_comm_op->output(0)->id()] = exec_comm_op->output(0)->shape();
@@ -951,10 +964,8 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
     if (is_comm_op(op) || is_parallel_attn_op(op)) {
       if (pg_union.has(local_device)) {
         exec_graph->CUR_HETERO_ID = pg_union.get_index(local_device);
-      } else if (exec_inputs.at(0)->producer()->placement_group_union().has(local_device)) {
-        exec_graph->CUR_HETERO_ID = exec_inputs.at(0)->producer()->placement_group_union().get_index(local_device);
       } else {
-        exec_graph->CUR_HETERO_ID = exec_graph->SUGGESTED_HETERO_ID;
+        exec_graph->CUR_HETERO_ID = exec_graph->COMPUTE_SUGGESTED_HETERO_ID;
       }
     }
     // Debug use
@@ -979,9 +990,38 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
       */
       exec_graph->CUR_HETERO_ID = 0;
     }
-    // HT_LOG_INFO << "make exec op " << exec_op << " done";
+
+    /*
+    HTShapeList output_shapes;
+    for (const auto& output : exec_op->outputs()) {
+      output_shapes.emplace_back(output->shape());
+    }
+    HT_LOG_INFO << "make exec op " << exec_op << " with inputs " << exec_op->inputs() << " and outputs " << exec_op->outputs() 
+      << ", output shapes are " << output_shapes;
+    */
     
-    if (exec_subgraph != nullptr) {
+    // non-local的使用optimizer strategy的op默认的hetero id为0
+    if (use_optimizer_strategy(op)) {
+      exec_op->set_suggested_hetero_id(0);
+    }
+    // 将当前exec op放到exec graph的subgraph中
+    // optimizer op本身也要放到compute-optimize bridge subgraph中
+    if (is_optimizer_update_op(exec_op)) {
+      HT_ASSERT(exec_subgraph == nullptr)
+        << "optimizer op " << exec_op << " shouldn't have any exec subgraph at the begining";
+      auto bridge_subgraph = exec_graph->_compute_optimize_bridge_subgraph_map[exec_op->input(0)->producer()->id()];
+      HT_ASSERT(bridge_subgraph != nullptr);
+      exec_graph->AddOpToSubGraph(exec_op, bridge_subgraph->global_name(), SubGraphOpType::UPDATE);
+    }
+    // group op要放到最终的一个subgraph中
+    else if (is_group_op(exec_op)) {
+      HT_ASSERT(exec_subgraph == nullptr)
+        << "group op " << exec_op << " shouldn't have any exec subgraph at the begining";
+      exec_graph->_terminate_subgraph = exec_graph->MakeSubGraph(SubGraphType::TERMINATE, "terminate");
+      exec_graph->AddOpToSubGraph(exec_op, exec_graph->_terminate_subgraph->global_name(), SubGraphOpType::UPDATE);
+    }
+    // 其余op直接放到exec_subgraph中（对应define时的subgraph）
+    else if (exec_subgraph != nullptr) {
       exec_graph->AddOpToSubGraph(exec_op, exec_subgraph->global_name(), GetSubGraphOpType(op));
       // HT_LOG_INFO << exec_op << " added to exec subgraph " << exec_subgraph->global_name() << " with op type " << static_cast<int32_t>(GetSubGraphOpType(op)); 
     }
@@ -1024,8 +1064,8 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
   }
 
   // sort the subgraphs
-  exec_graph->SortOptimizeComputeBridgeSubgraph();
-  exec_graph->SortComputeOptimizeBridgeSubgraph();
+  exec_graph->sort_optimize_compute_bridge_subgraph();
+  exec_graph->sort_compute_optimize_bridge_subgraph();
 
   // assign fw_op_id map
   for (auto& op_ref : deq_global_topo) {
@@ -1215,8 +1255,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
         auto it = shape_plan.find(kv.first);
         // 1、有可能是feed_dict发生了改变（在依据global topo生成的shape plan中没有feed dict）
         // 2、有可能是feed_dict的shape发生了改变（shape对不上）
-        HT_LOG_TRACE << local_device << ": shape plan is " << shape_plan << " and key to match is "
-          << kv.first << ":" << feed_dict_shape_list[idx][kv.first];
+        // HT_LOG_TRACE << local_device << ": shape plan is " << shape_plan << " and key to match is " << kv.first << ":" << feed_dict_shape_list[idx][kv.first];
         if (it == shape_plan.end()) {
           HT_LOG_TRACE << local_device << ": cannot find feed dict tensor " << kv.first << " in shape plan " << i;
           shape_plan_matched = false;

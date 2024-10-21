@@ -29,8 +29,7 @@ static int64_t get_local_seq_len(const Tensor& input, const SyShapeList& multi_s
     return seq_lens_symbol.at(graph.CUR_HETERO_ID)->get_val();
   } else {
     if (input->cur_ds_union().is_hetero()) {
-      // inferred_local_placement_group_idx sucks!
-      auto idx = input->producer()->inferred_local_placement_group_idx();
+      auto idx = input->inferred_local_placement_group_idx();
       return seq_lens_symbol.at(idx)->get_val();
     } else {
       for (auto& symbol : seq_lens_symbol) {
@@ -43,11 +42,12 @@ static int64_t get_local_seq_len(const Tensor& input, const SyShapeList& multi_s
 }
 
 static int64_t get_local_dcp_idx(const Tensor& input) {
-  if (input->cur_ds_union().is_hetero()) {
-    // inferred_local_placement_group_idx sucks!
-    return input->producer()->inferred_local_placement_group_idx();
-  } 
   auto local_device = hetu::impl::comm::GetLocalDevice();
+  if (input->cur_ds_union().is_hetero()) {
+    HT_ASSERT(input->placement_group_union().has(local_device))
+      << "ParallelAttnOp input " << input << " should already deduced the pg union and be local";
+    return input->placement_group_union().get_index(local_device);
+  } 
   const auto& ds = input->cur_ds_union().get(0);
   const auto& pg = input->placement_group_union().get(0);
   auto it = std::find(pg.devices().begin(), pg.devices().end(), local_device);

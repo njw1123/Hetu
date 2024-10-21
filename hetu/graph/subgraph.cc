@@ -2,16 +2,22 @@
 #include "hetu/graph/profiler.h"
 #include "hetu/graph/subgraph.h"
 #include "hetu/graph/ops/Concatenate.h"
+#include "hetu/graph/ops/ParallelAttention.h"
 #include <queue>
 
 namespace hetu {
 namespace graph {
 
-void SubGraph::alloc_concat_memory(Operator& final_concat_op, RuntimeContext& runtime_ctx) {
+void SubGraph::alloc_concat_memory(Operator& final_concat_op, RuntimeContext& runtime_ctx, std::vector<TensorId>& alloc_concat_tensor_id_list) {
   HT_ASSERT(_already_topo_sorted)
     << "must ensure it is topo sorted";
   HT_ASSERT(final_concat_op->num_outputs() == 1)
     << "there should only be one output of final_concat_op " << final_concat_op;
+  // 说明已经分配过memory了
+  // 直接返回即可
+  if (std::find(alloc_concat_tensor_id_list.begin(), alloc_concat_tensor_id_list.end(), final_concat_op->output(0)->id()) != alloc_concat_tensor_id_list.end()) {
+    return;
+  }
   const auto& final_concat_op_shape = runtime_ctx.get_runtime_shape(final_concat_op->output(0)->id());
   NDArray final_ndarray;
   if (runtime_ctx.has_runtime_allocation(final_concat_op->output(0)->id())) {
@@ -21,7 +27,8 @@ void SubGraph::alloc_concat_memory(Operator& final_concat_op, RuntimeContext& ru
                                         final_concat_op->instantiation_ctx().placement,
                                         final_concat_op->output(0)->dtype(),
                                         final_concat_op->instantiation_ctx().stream_index);
-    runtime_ctx.add_runtime_allocation(final_concat_op->output(0), final_ndarray);
+    runtime_ctx.add_runtime_allocation(final_concat_op->output(0)->id(), final_ndarray);
+    alloc_concat_tensor_id_list.push_back(final_concat_op->output(0)->id());
   }
   std::queue<Operator> concat_op_queue;
   concat_op_queue.push(final_concat_op);
@@ -40,6 +47,7 @@ void SubGraph::alloc_concat_memory(Operator& final_concat_op, RuntimeContext& ru
       if (concat_num == 1) {
         // 直接inplace
         runtime_ctx.add_runtime_allocation(cur_op->input(0)->id(), cur_ndarray);
+        alloc_concat_tensor_id_list.push_back(cur_op->input(0)->id());
       }
       continue;
     }
@@ -50,6 +58,7 @@ void SubGraph::alloc_concat_memory(Operator& final_concat_op, RuntimeContext& ru
       const auto& input_shape = runtime_ctx.get_runtime_shape(input->id()); 
       auto input_ndarray = NDArray::slice(cur_ndarray, begin_pos, input_shape);
       runtime_ctx.add_runtime_allocation(input->id(), input_ndarray);
+      alloc_concat_tensor_id_list.push_back(input->id());
       HT_ASSERT(input_ndarray->is_contiguous())
         << "found the runtime allocation of " << input << " uncontiguous"
         << ", which shouldn't happen";
@@ -122,13 +131,13 @@ void SubGraph::topo_sort(bool only_local) {
 // 按照topo顺序运行整个subgraph
 // 输入输出全部存放在tensor2data中
 // 注意runtime_ctx中的allocation与skip仍然是适用的
-void SubGraph::run(Tensor2NDArrayMap& tensor2data, RuntimeContext& runtime_ctx,
-                   size_t micro_batch_id, SubGraphOpType subgraph_type) {
+void SubGraph::run(Tensor2NDArrayMap& tensor2data, const Tensor2NDArrayMap& preserved_data, RuntimeContext& runtime_ctx,
+                   size_t micro_batch_id, SubGraphOpType subgraph_op_type, const OpHandler& op_handler) {
   HT_ASSERT(_already_topo_sorted)
     << "cannot run before subgraph " << _global_name << " topo sort";
   std::reference_wrapper<OpRefList> topo_ref = std::ref(_ops_topo);
   std::reference_wrapper<Tensor2IntMap> tensor2degrees_ref = std::ref(_tensor2degrees);
-  switch (subgraph_type)
+  switch (subgraph_op_type)
   {
     case SubGraphOpType::FORWARD:
       topo_ref = std::ref(_ops_topo);
@@ -147,10 +156,17 @@ void SubGraph::run(Tensor2NDArrayMap& tensor2data, RuntimeContext& runtime_ctx,
   }
 
   // workaround: 针对batched-send-recv通信pattern的内存优化
-  if (!topo_ref.get().empty() && is_concat_op(topo_ref.get().back())) {
-    alloc_concat_memory(topo_ref.get().back().get(), runtime_ctx);
+  bool use_concat_memory_optimization = true;
+  std::vector<TensorId> alloc_concat_tensor_id_list;
+  if (use_concat_memory_optimization) {
+    for (auto it = topo_ref.get().rbegin(); it != topo_ref.get().rend(); ++it) {
+      if (is_concat_op(it->get())) {
+        alloc_concat_memory(it->get(), runtime_ctx, alloc_concat_tensor_id_list);
+      }
+    }
   }
   Tensor2IntMap tensor2degrees = tensor2degrees_ref.get();
+  // HT_LOG_INFO << "subgraph " << _global_name << " begin run local topo";
   for (auto& op_ref : topo_ref.get()) {
     auto& op = op_ref.get();
     if (runtime_ctx.has_runtime_skipped(op->id())) {
@@ -159,15 +175,45 @@ void SubGraph::run(Tensor2NDArrayMap& tensor2data, RuntimeContext& runtime_ctx,
     if (is_peer_to_peer_send_op(op) || is_peer_to_peer_recv_op(op)) {
       HT_RUNTIME_ERROR << "p2p op in subgraph is currently forbidden, because we can't know how to wrap them with ncclGroup";
     }
+    // parallel attn op算子手动实现且比较复杂
+    // 目前单独维护attn ctx
+    // 这里需要从外部传入micro batch id来确定 fwd存/bwd取 哪个attn ctx
+    if (is_parallel_attn_op(op) || is_parallel_attn_grad_op(op)) {
+      if (is_parallel_attn_op(op)) {
+        dynamic_cast<ParallelAttentionOpImpl&>(op->body()).set_attn_ctx_num(micro_batch_id);
+      } else {
+        dynamic_cast<ParallelAttentionGradientOpImpl&>(op->body()).set_attn_ctx_num(micro_batch_id);
+      }
+    }
+
+    // 执行回调函数
+    if (op_handler) {
+      // HT_LOG_INFO << "subgraph " << _global_name << " running call back func";
+      auto status = op_handler(op, tensor2data, micro_batch_id);
+      if (status.need_skip) {
+        continue;
+      }
+    }
+
     NDArrayList input_vals;
     input_vals.reserve(op->num_inputs());
     for (const auto& input : op->inputs()) {
-      auto it = tensor2data.find(input->id());
-      HT_ASSERT(it != tensor2data.end() && it->second.is_defined())
-        << "Failed to execute the \"" << op->type() << "\" operation "
-        << "(with name \"" << op->name() << "\") in subgraph " << _global_name << ": "
-        << "Cannot find input " << input;
-      auto data = it->second;
+      HT_ASSERT(input.is_defined())
+        << op << " has an undefined input, it cannot run";
+      NDArray data;
+      auto preserved_it = preserved_data.find(input->id());
+      if (preserved_it != preserved_data.end()) {
+        data = preserved_it->second;
+      } 
+      // 只可能在preserved data或者tensor2data中
+      else {
+        auto it = tensor2data.find(input->id());
+        HT_ASSERT(it != tensor2data.end() && it->second.is_defined())
+          << "Failed to execute the \"" << op->type() << "\" operation "
+          << "(with name \"" << op->name() << "\") in subgraph " << _global_name << ": "
+          << "Cannot find input " << input;
+        data = it->second;
+      }
       input_vals.emplace_back(data);
       HT_ASSERT(data->device() == input->placement() && data->dtype() == input->dtype())
         << input << " placement should be " << input->placement() << " and dtype should be " << input->dtype()
@@ -181,6 +227,7 @@ void SubGraph::run(Tensor2NDArrayMap& tensor2data, RuntimeContext& runtime_ctx,
     // HT_LOG_INFO << "subgraph " << _global_name << " execute " << op << " begin";
     NDArrayList output_vals = op->Compute(input_vals, runtime_ctx, micro_batch_id);
     checkOutputsMemory(op, micro_batch_id, input_vals, output_vals);
+    op->instantiation_ctx().stream().Sync();
     // HT_LOG_INFO << "subgraph " << _global_name << " execute " << op << " end";
     // Note: The usage should be marked inside kernels, 
     // but we still mark here in case we forget to do so in some kernels. 
@@ -190,6 +237,12 @@ void SubGraph::run(Tensor2NDArrayMap& tensor2data, RuntimeContext& runtime_ctx,
       const auto& output = op->output(i);
       tensor2data[output->id()] = output_vals.at(i);
     }
+  }
+  // 跑完之后就删除来清空NDArray的引用计数
+  // 否则mempool将一直无法回收这些显存
+  // 直到runtime_ctx析构为止
+  for (const auto& tensor_id : alloc_concat_tensor_id_list) {
+    runtime_ctx.delete_runtime_allocation(tensor_id);
   }
 }
 

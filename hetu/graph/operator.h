@@ -269,6 +269,13 @@ class RuntimeContext {
     return it->second;
   }
 
+  void delete_runtime_allocation(const TensorId& tensor_id) {
+    auto it = _allocation_plan.find(tensor_id);
+    HT_ASSERT(it != _allocation_plan.end())
+      << "Tensor " << tensor_id << " is not existed in runtime allocation plan";
+    _allocation_plan.erase(it);
+  }
+
   bool has_runtime_skipped(const OpId& op_id) const {
     return _skipped_plan.find(op_id) != _skipped_plan.end();
   }
@@ -434,8 +441,7 @@ class OpInterface : public shared_ptr_target {
     __builtin_unreachable();
   }
 
-  virtual bool DoMapToParallelDevices(Operator& op,
-                                      const DeviceGroupUnion& placement_group_union) const;
+  virtual bool DoMapToParallelDevices(Operator& op, const DeviceGroupUnion& placement_group_union) const;
 
   virtual void DoMergeStrategy(Operator& op, Operator& another_op);
 
@@ -802,30 +808,42 @@ class OpDef : public shared_ptr_target {
     return _inst_ctx.has_placement_group;
   }
 
-  const DeviceGroupUnion& placement_group_union() const   {
+  const DeviceGroupUnion& placement_group_union() const {
+    HT_RUNTIME_ERROR << "Currently it is forbidden to call placement_group_union() of op " << _op_meta.name
+      << ", only tensor has placement_group_union(), that is because the placement_group_union() is undefined for ops such as comm op"
+      << ", if you want to judge whether op is local, please use placement_group() instead";
     return _inst_ctx.placement_group_union;
   }
 
   const DeviceGroup placement_group() const {
-    HT_LOG_WARN << "It's better to use placement_group_union instead of placement_group";
+    HT_ASSERT(has_placement_group())
+      << _op_meta.name << " should set placement group in advance";
     return _inst_ctx.placement_group_union.all();
   }
 
   const DeviceGroup local_placement_group() const {
+    HT_RUNTIME_ERROR << "Currently it is forbidden to call local_placement_group() of op " << _op_meta.name
+      << ", only tensor has local_placement_group(), that is because the local_placement_group() is undefined for ops such as comm op";
     HT_ASSERT(!placement().is_undetermined())
       << "local_placement_group should be called only after instantiated the placement";
     return _inst_ctx.placement_group_union.get(placement());
   }
 
   size_t local_placement_group_idx() const {
+    HT_RUNTIME_ERROR << "Currently it is forbidden to call local_placement_group_idx() of op " << _op_meta.name
+      << ", only tensor has local_placement_group_idx(), that is because the local_placement_group_idx() is undefined for ops such as comm op";
     HT_ASSERT(!placement().is_undetermined())
       << "local_placement_group_idx should be called only after instantiated the placement";
     return _inst_ctx.placement_group_union.get_index(placement());
   }
 
-  // 支持placement还未instantiate时候进行推导
-  // 主要用在未instantiate的variable和comm中
-  size_t inferred_local_placement_group_idx() const;
+  size_t suggested_hetero_id() const {
+    return _suggested_hetero_id;
+  }
+
+  void set_suggested_hetero_id(size_t suggested_hetero_id) {
+    _suggested_hetero_id = suggested_hetero_id;
+  }
 
   const Device& placement() const noexcept {
     return _inst_ctx.placement;
@@ -882,6 +900,8 @@ class OpDef : public shared_ptr_target {
   OpId _fw_op_id{-1}; // only used for bw op
   OpMeta _op_meta;
   OpInstantiationContext _inst_ctx;
+
+  size_t _suggested_hetero_id{0}; // suggest which hetero id should use for non-local op
 };
 
 class Operator : public shared_ptr_wrapper<OpDef> {

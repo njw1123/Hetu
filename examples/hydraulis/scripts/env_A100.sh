@@ -4,6 +4,9 @@ source ../../hetu_refactor.exp
 
 export PATH="/home/pkuhetu/envs/miniconda3/envs/hetu-grpc/bin:${PATH}"
 
+export HETU_P2P=SINGLE_COMMUNICATOR
+export HETU_BRIDGE=SINGLE_COMMUNICATOR
+
 export HETU_SWITCH_ALGORITHM=NEW_GREEDY
 export HETU_SWITCH_PROFILE=TIME
 export HETU_INTERNAL_LOG_LEVEL=INFO

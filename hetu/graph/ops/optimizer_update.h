@@ -43,9 +43,7 @@ class OptimizerUpdateOpInterface : public OpInterface {
     return {inputs.front()};
   }
 
-  bool
-  DoMapToParallelDevices(Operator& op,
-                         const DeviceGroupUnion& placement_group_union) const override;
+  bool DoMapToParallelDevices(Operator& op, const DeviceGroupUnion& placement_group_union) const override;
 
  public:
   inline bool require_contig_inputs() const override {

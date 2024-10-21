@@ -27,7 +27,7 @@ if __name__ == '__main__':
     memory_gap = {'gpu1': 1755 * (1024 ** 2), 'gpu2': 4831 * (1024 ** 2), 'gpu4': 7299 * (1024 ** 2), 'node': 12281 * (1024 ** 2)}
     memory_safe_bound = 2 * (1024 ** 3)
     gpus_per_node = 8
-    gpu_memory_bound = (40536 + 9000) * (1024 ** 2)
+    gpu_memory_bound = (40536) * (1024 ** 2)
     # 生成json
     strategy_list = []
     data = {}

@@ -237,6 +237,12 @@ int DeviceToWorldRank(const Device& device) {
   return it->second;
 }
 
+const Device& WorldRankToDevice(int rank) {
+  HT_ASSERT(rank < rank_to_device_mapping.size())
+    << "Cannot find rank " << rank << ".";
+  return rank_to_device_mapping[rank];
+}
+
 std::vector<int> DeviceGroupToWorldRanks(const DeviceGroup& device_group) {
   std::vector<int> ranks;
   ranks.reserve(device_group.num_devices());

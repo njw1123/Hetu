@@ -28,7 +28,7 @@ NDArrayList ParallelVariableOpImpl::DoAllocOutputs(Operator& op,
   HT_ASSERT(ds_union.hetero_dim() == -1 || ds_union.hetero_dim() == 0 || ds_union.hetero_dim() == NULL_HETERO_DIM)
     << "ParallelVariableOp " << op << " can only hetero on dup (normal dp param) or split0 (Adam mean or var)"
     << ", but found " << ds_union.hetero_dim();
-  auto ds = ds_union.get(op->inferred_local_placement_group_idx());
+  auto ds = op->output(0)->inferred_cur_ds();
   auto local_idx = _local_idx.empty() ? -1 : _local_idx[op->graph().OPTIMIZE_STRATEGY_ID];
   HT_ASSERT(_init == nullptr || local_idx != -1)
     << "ParallelVariableOp: when use initializer, local_idx "

@@ -228,9 +228,7 @@ class ParallelVariableOpImpl : public OpInterface {
 
   HTShapeList DoInferShape(Operator& op, const HTShapeList& input_shapes,
                            RuntimeContext& runtime_ctx) const override {
-    auto cur_ds_union = _ds_hierarchy.get(op->graph().CUR_STRATEGY_ID);
-    // inferred_local_placement_group_id sucks!
-    auto cur_ds = cur_ds_union.get(op->inferred_local_placement_group_idx());
+    auto cur_ds = op->output(0)->inferred_cur_ds();
     HT_ASSERT(!_global_shape.empty())
       << "global shape should be initialized";
     HTShape cur_local_shape(_global_shape.size());

@@ -108,7 +108,7 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
       DeviceGroup comm_group = reduce_scatter_impl.comm_group();
       int32_t scatter_dim = reduce_scatter_impl.get_scatter_dim();
       // HT_LOG_WARN << op << " comm group: " << comm_group;
-      auto local_device_index = op->local_placement_group().get_index(op->placement());
+      auto local_device_index = op->output(0)->local_placement_group().get_index(op->placement());
       auto scatter_num = comm_group.num_devices();
       HT_ASSERT(!partial_grad->cur_ds_union().is_hetero())
         << "Adam: reduce scatter shouln't have hetero grad";
@@ -148,7 +148,7 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
       auto& partial_grad = split_reduce_scatter_op->input(0);
       const std::vector<DeviceGroupList>& comm_groups_list = split_reduce_scatter_impl.comm_groups_list();
       // HT_LOG_WARN << op << " comm group: " << comm_group;
-      auto local_device_index = op->local_placement_group().get_index(op->placement());
+      auto local_device_index = op->output(0)->local_placement_group().get_index(op->placement());
       auto scatter_num = comm_groups_list.at(0).at(0).num_devices();
       HT_ASSERT(partial_grad->cur_ds_union().hetero_dim() == -2)
         << "Adam: split reduce scatter should have hetero grad whose hetero dim is -2";
@@ -158,8 +158,8 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
       auto relative_param = param;
       if (is_reduce_scatter_op(op->input(1)->producer()->input(0)->producer())) {
         auto& reduce_scatter_op = op->input(1)->producer()->input(0)->producer();
-        auto num_chunks = reduce_scatter_op->local_placement_group().num_devices();
-        auto idx = reduce_scatter_op->local_placement_group().get_index(op->placement());
+        auto num_chunks = reduce_scatter_op->output(0)->local_placement_group().num_devices();
+        auto idx = reduce_scatter_op->output(0)->local_placement_group().get_index(op->placement());
         relative_param = NDArray::split(relative_param, num_chunks).at(idx);
       }
       auto param_size_per_split = DIVUP(relative_param->numel(), split_num);

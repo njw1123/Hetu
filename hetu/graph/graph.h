@@ -65,7 +65,7 @@ class Graph {
   bool CREATE_HETERO = false;
   bool USE_HETERO_ID = false;
   size_t CUR_HETERO_ID = 0;
-  size_t SUGGESTED_HETERO_ID = 0;
+  size_t COMPUTE_SUGGESTED_HETERO_ID = 0;
 
   // disable copy constructor and move constructor
   Graph(const Graph&) = delete;
@@ -849,6 +849,7 @@ inline OpRefList Graph::TopoSort(const OpRefList& ops, int32_t num_ops_hint,
   std::unordered_map<OpId, int32_t> heuristic_deps;
   std::unordered_set<OpId> visited;
   std::unordered_map<OpId, OpIdSet> extra_edges;
+  OpRefList zero_in_degree_ops;
   OpRefList inplace_ops;
 
   OpRefDeque traverse_queue;
@@ -904,7 +905,7 @@ inline OpRefList Graph::TopoSort(const OpRefList& ops, int32_t num_ops_hint,
     }
   }
   */
-  OpRefList zero_in_degree_ops;
+
   std::function<void(OpRef)> traverse_dfs = [&](OpRef op_ref) -> void {
     auto& op = op_ref.get();
     auto op_in_degrees = (stop_at && stop_at(op)) ? 0 : op->in_degrees();
@@ -921,7 +922,6 @@ inline OpRefList Graph::TopoSort(const OpRefList& ops, int32_t num_ops_hint,
       return;
     }
     Operator::for_each_input_tensor(op, [&](Tensor& tensor) {
-      auto producer_id = tensor->producer_id();
       if (heuristic_deps.find(tensor->producer()->id()) == heuristic_deps.end()
           || heuristic_deps[tensor->producer()->id()] < heuristic_deps[op->id()] + 1) {
         heuristic_deps[tensor->producer()->id()] = heuristic_deps[op->id()] + 1;
@@ -929,12 +929,43 @@ inline OpRefList Graph::TopoSort(const OpRefList& ops, int32_t num_ops_hint,
       }
     });
   };
+
+  // traverse bfs can handle larger topo
+  std::function<void(OpRef)> traverse_bfs = [&](OpRef op_ref) -> void {
+    std::queue<OpRef> bfs_queue;
+    bfs_queue.push(op_ref);
+    while (!bfs_queue.empty()) {
+      OpRef current_op_ref = bfs_queue.front();
+      bfs_queue.pop();
+      auto& current_op = current_op_ref.get();
+      auto op_in_degrees = (stop_at && stop_at(current_op)) ? 0 : current_op->in_degrees();
+      if (op_in_degrees != current_op->in_degrees()) {
+        HT_LOG_DEBUG << "make topo: " << current_op << " is forced to be stopped "
+          << op_in_degrees << " " << current_op->in_degrees();
+      }
+      in_degrees[current_op->id()] = op_in_degrees;
+      if (op_in_degrees == 0 && visited.find(current_op->id()) == visited.end()) {
+        zero_in_degree_ops.push_back(current_op_ref);
+        visited.insert(current_op->id());
+        continue;
+      }
+      Operator::for_each_input_tensor(current_op, [&](Tensor& tensor) {
+        if (heuristic_deps.find(tensor->producer()->id()) == heuristic_deps.end() || 
+            heuristic_deps[tensor->producer()->id()] < heuristic_deps[current_op->id()] + 1) {
+          heuristic_deps[tensor->producer()->id()] = heuristic_deps[current_op->id()] + 1;
+          bfs_queue.push(std::ref(tensor->producer()));  // Enqueue the producer            
+        }
+      });
+    }
+  };
+
   for (auto& op_ref : ops) {
     if (heuristic_deps.find(op_ref.get()->id()) != heuristic_deps.end()) {
       continue;
     }
     heuristic_deps[op_ref.get()->id()] = 0;
-    traverse_dfs(op_ref);
+    // traverse_dfs(op_ref); // dfs may cause stack overflow and segmentation fault
+    traverse_bfs(op_ref);
   }
   for (auto& op_ref : zero_in_degree_ops) {
     topo_queue.push(op_ref);

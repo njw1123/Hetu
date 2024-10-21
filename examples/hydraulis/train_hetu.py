@@ -8,6 +8,7 @@ import ast
 import json
 import numpy as np
 import hetu as ht
+from torch.profiler import profile, ProfilerActivity
 from hetu_llama import LLamaLMHeadModel
 from llama_config import LLaMAConfig
 from data_utils import LLaMAJsonDataset, build_data_loader, get_sorted_batch_and_len, build_fake_batch_and_len, get_input_and_label_buckets
@@ -252,6 +253,7 @@ def pretrain(args):
                 # packing
                 if batching_method == 4:
                     max_seqlen = max_seqlen_list[dp_id]
+                    print(f"{local_device}: warm up with max_seqlen = {max_seqlen}")
                 # padding (or original greedy packing with static or dynamic shape)
                 else:
                     assert max_padded_seqlen, "you should provide the max seqlen when doing padding or static-shape packing"
@@ -343,7 +345,12 @@ def pretrain(args):
                 for i in range(config.n_layer):
                     feed_dict[config.cu_seqlens_list[i]] = [x.astype(np.int32) for x in cu_seqlens_list]
             start_time = time.time()
-            results = hetu_train(feed_dict, len(input_batch), compute_strategy_id, optimize_strategy_id)
+            if args.torch_profile != 0 and step == 0:
+                with profile(activities=[ProfilerActivity.CUDA]) as prof:
+                    results = hetu_train(feed_dict, len(input_batch), compute_strategy_id, optimize_strategy_id)
+                prof.export_chrome_trace("trace.json")
+            else:
+                results = hetu_train(feed_dict, len(input_batch), compute_strategy_id, optimize_strategy_id)
             end_time = time.time()
             consumed_samples += args.global_batch_size
             # 如果在pipeline的最后一个stage上那么就打印loss
@@ -385,6 +392,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--fake_seqlens", type=str, default="[]", help="seqlen list of fake data"
+    )
+    parser.add_argument(
+        "--torch_profile", type=int, default=0, help="use pytorch profiler"
     )
     parser.add_argument(
         "--batching_method", type=int, default=4, help="batching method"

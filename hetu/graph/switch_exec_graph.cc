@@ -2221,8 +2221,15 @@ Tensor ComplexExecComm::Instantiate(StreamIndex comm_stream_idx) {
   */
   // if nothing to do
   if (send_len == 0 && recv_len == 0) {
-    return comm_input;
+    _is_instantiated = true;
+    if (_comm_results.empty()) {
+      return comm_input;
+    }
+    HT_ASSERT(_comm_results.size() == 1)
+      << "wrong size";
+    return _comm_results[0];
   }
+  // HT_LOG_INFO << "MakeBatchedISendIRecvOp devices are " << comm_devices;
   auto batched_isend_irecv_output = MakeBatchedISendIRecvOp(send_tensors, send_to_devices, 
                                                             recv_tensor_shapes, recv_from_devices, 
                                                             comm_devices, dtype, 

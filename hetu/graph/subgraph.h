@@ -5,15 +5,23 @@
 #include "hetu/graph/common.h"
 #include "hetu/graph/tensor.h"
 #include "hetu/graph/operator.h"
+#include <functional>
 
 namespace hetu {
 namespace graph {
+
+struct OpHandlerStatus {
+  bool need_skip = false;
+};
+
+using OpHandler = std::function<OpHandlerStatus(Operator&, Tensor2NDArrayMap&, size_t)>;
 
 enum class SubGraphType : int8_t {
   MODULE = 0,
   PIPELINE,
   OPTIMIZE_COMPUTE_BRIDGE,
   COMPUTE_OPTIMIZE_BRIDGE,
+  TERMINATE,
   NUM_SUBGRAPH_TYPES
 };
 
@@ -186,12 +194,13 @@ class SubGraph {
       return _update_ops_topo;
     }
 
-    void alloc_concat_memory(Operator& final_concat_op, RuntimeContext& runtime_ctx);
+    void alloc_concat_memory(Operator& final_concat_op, RuntimeContext& runtime_ctx, std::vector<TensorId>& alloc_concat_tensor_id_list);
 
     void topo_sort(bool only_local = true);
 
-    void run(Tensor2NDArrayMap& tensor2data, RuntimeContext& runtime_ctx,
-             size_t micro_batch_id = 0, SubGraphOpType subgraph_type = SubGraphOpType::FORWARD);
+    void run(Tensor2NDArrayMap& tensor2data, const Tensor2NDArrayMap& preserved_data, RuntimeContext& runtime_ctx,
+             size_t micro_batch_id = 0, SubGraphOpType subgraph_op_type = SubGraphOpType::FORWARD,
+             const OpHandler& = {});
 
     std::vector<std::string> subgraph_info() {
       std::vector<std::string> output = {};

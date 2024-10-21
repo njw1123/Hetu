@@ -195,7 +195,7 @@ class TensorDef : public shared_ptr_target {
     return _global_shape.size() > 0;
   }
 
-  const Device& placement() noexcept {
+  const Device& placement() const noexcept {
     return _placement;
   }
 
@@ -363,6 +363,10 @@ class TensorDef : public shared_ptr_target {
     return _placement_group_union.get_index(_placement);
   }
 
+  // 支持placement还未instantiate时候进行推导
+  // 主要用在未instantiate的variable和comm中
+  size_t inferred_local_placement_group_idx() const;
+
   void set_placement_group_union(const DeviceGroupUnion& placement_group_union) {
     _placement_group_union = placement_group_union;
     _has_placement_group = true;
@@ -430,6 +434,14 @@ class TensorDef : public shared_ptr_target {
 
   void merge_strategy(Tensor& tensor);
 
+  bool use_compute_suggested_hetero_id() const {
+    return _use_compute_suggested_hetero_id;
+  }
+
+  void set_to_use_compute_suggested_hetero_id() {
+    _use_compute_suggested_hetero_id = true;
+  }
+
  protected:
   void AddConsumer(Operator& op);
 
@@ -451,6 +463,7 @@ class TensorDef : public shared_ptr_target {
   DistributedStatesUnion _dummy_ds_union{}; // for deduce_states=False op outputs
   HTShape _global_shape;
   bool _is_grad{false};
+  bool _use_compute_suggested_hetero_id{true};
 
   // Used when the tensor's shape is not fixed
   bool _symbolic;

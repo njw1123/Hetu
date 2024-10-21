@@ -61,10 +61,6 @@ class ExecutableGraph : public Graph {
 
   bool Instantiate(const TensorList& fetches, const Device& placement);
 
-  NDArrayList CrucialRun(const TensorList& fetches, 
-                         const FeedDict& feed_dict, 
-                         const int num_micro_batches);
-
   NDArrayList Run(const TensorList& fetches, 
                   const FeedDict& feed_dict = {});
 
@@ -76,9 +72,17 @@ class ExecutableGraph : public Graph {
     return GraphType::EXECUTABLE;
   }
 
-  void SortOptimizeComputeBridgeSubgraph();
+  bool p2p_single_communicator() const {
+    return _p2p_single_communicator;
+  }
 
-  void SortComputeOptimizeBridgeSubgraph();
+  bool is_pipeline_stage_send_op(Operator& op);
+
+  bool is_pipeline_stage_recv_op(Operator& op);
+
+  void sort_optimize_compute_bridge_subgraph();
+
+  void sort_compute_optimize_bridge_subgraph();
 
   void SetPipeline(const Device2PipelineMap& pipeline_map) {
     _pipeline_map = pipeline_map;
@@ -242,19 +246,6 @@ class ExecutableGraph : public Graph {
 
   void InsertContiguousOp(const OpRefList& topo_order);
 
-  // deprecated
-  /*
-  void CrossSend(std::unordered_map<int32_t, int32_t> split_cur_state, 
-                 std::unordered_map<int32_t, int32_t> split_target_state,
-                 int32_t depth, bool need_split, int32_t& device_index, 
-                 Operator& comm_op, TensorList& send_datas, 
-                 std::vector<int32_t>& dsts, int32_t& used_device_index);
-
-  Tensor CrossReceive(int32_t depth, int32_t& device_index, Operator& comm_op, 
-                      TensorList& recv_datas, std::vector<int32_t>& srcs,
-                      Tensor& self_send_data, int32_t& used_device_index);
-  */
-
   Operator& MakeOpInner(std::shared_ptr<OpInterface> body, TensorList inputs,
                         OpMeta op_meta);
 
@@ -274,7 +265,15 @@ class ExecutableGraph : public Graph {
     const Tensor& tensor, NDArray data,
     const Initializer& init = VoidifiedInitializer()) override;
 
-  void AllocRuntimeBuffer(std::vector<RuntimeContext>& runtime_ctx_list);
+  void PreRun(std::vector<RuntimeContext>& runtime_ctx_list);
+
+  void PostRun(std::vector<RuntimeContext>& runtime_ctx_list, Tensor2NDArrayMap& tensor2data);
+
+  OpHandlerStatus PostOpHandler(Operator& op, Tensor2NDArrayMap& tensor2data, size_t micro_batch_id);
+
+  NDArrayList CrucialRun(const TensorList& fetches, 
+                         const FeedDict& feed_dict, 
+                         const int num_micro_batches);
 
   void GetExecEnvs();
   
@@ -343,8 +342,13 @@ class ExecutableGraph : public Graph {
   // 排序后的
   std::vector<std::pair<OpId, std::shared_ptr<SubGraph>>> _optimize_compute_bridge_subgraph_sorted;
   std::vector<std::pair<OpId, std::shared_ptr<SubGraph>>> _compute_optimize_bridge_subgraph_sorted;
+  // 存放group op的subgraph
+  // 以及后面可能会有一些别的后处理
+  std::shared_ptr<SubGraph> _terminate_subgraph;
 
-  // profile相关
+  // env相关
+  bool _p2p_single_communicator;
+  bool _bridge_single_communicator;
   int32_t _straggler_flag;
   std::string _straggler_log_file_path;
   MEMORY_PROFILE_LEVEL _memory_profile_level;

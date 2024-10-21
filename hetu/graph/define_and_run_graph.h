@@ -103,6 +103,8 @@ class DefineAndRunGraph : public Graph {
     return GraphType::DEFINE_AND_RUN;
   }
 
+  bool use_optimizer_strategy(Operator& op) const;
+
   const ExecGraphPlan& GetPlan(size_t num) const {
     HT_ASSERT(num < _exec_graph_plan_pool.size());
     return _exec_graph_plan_pool[num];

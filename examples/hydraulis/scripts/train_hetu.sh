@@ -1,10 +1,10 @@
 NUM_LAYERS=${1:-32}
 HIDDEN_SIZE=${2:-4096}
-HIDDEN_SIZE=${2:-256}
+# HIDDEN_SIZE=${2:-256}
 FFN_HIDDEN_SIZE=${3:-11008}
-FFN_HIDDEN_SIZE=${3:-2752}
+# FFN_HIDDEN_SIZE=${3:-2560}
 NUM_HEADS=${4:-32}
-GLOBAL_BATCH_SIZE=${5:-128}
+GLOBAL_BATCH_SIZE=${5:-64}
 MAX_SEQ_LEN=${6:-8192}
 SERVER_ADDR=${7:-"172.24.10.109"} # master-0
 # SERVER_ADDR=${7:-"172.24.93.179"} # worker-0
@@ -13,13 +13,13 @@ SERVER_PORT=${8:-"23333"}
 HOST_FILE_PATH=${9:-"./scripts/host.yaml"}
 ENV_FILE_PATH=${10:-"./scripts/env_A100.sh"}
 
+TORCH_PROFILE=0
 CASE=0
 if [[ ${CASE} -eq 0 ]]; then
 	# test
-	NUM_GPUS=8
-	# MULTI_TP_PP_LIST="[[(2, 2), (1, 4),], ]"
-	MULTI_TP_PP_LIST="[[(2, 2), (2, 2)], [(4, 1), (1, 4)]]"
-	BATCHING_METHOD=0
+	NUM_GPUS=16
+	MULTI_TP_PP_LIST="[[(8, 1), (8, 1)], [(4, 2), (1, 8)], ]"
+	BATCHING_METHOD=4
 elif [[ ${CASE} -eq 1 ]]; then
 	# homo + greedy packing with static shape
 	NUM_GPUS=16
@@ -74,7 +74,9 @@ JSON_KEY=content
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json
 MERGE_FILE=${ROOT_FOLDER}/merges.txt
 
+# compute-sanitizer can be added in front of python3 to check illegal mem access bug
 CMD="python3 -u train_hetu.py \
+--torch_profile $TORCH_PROFILE \
 --batching_method $BATCHING_METHOD \
 --multi_tp_pp_list \"${MULTI_TP_PP_LIST}\" \
 --global_batch_size $GLOBAL_BATCH_SIZE \

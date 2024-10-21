@@ -55,7 +55,7 @@ void Recompute::GetMaxRecomputeSubGraph(Op2OpRefMap& recompute_subgraph, bool ge
       for (auto& input : op_inputs) {
         auto& op = input->producer();
         // HT_LOG_TRACE << op_ref.get() << " input op " << op;
-        if (op->placement_group_union().has(local_device) && op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID)
+        if (op->placement_group().contains(local_device) && op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->suggested_hetero_id())
             && !IsNoRecomputedOp(op) && recompute_subgraph.find(op->id()) == recompute_subgraph.end()) {
           to_visit.push(std::ref(op));
         }
@@ -69,7 +69,7 @@ void Recompute::GetMaxRecomputeSubGraph(Op2OpRefMap& recompute_subgraph, bool ge
         for (auto& op_ref : out_consumers) {
           auto& op = op_ref.get();
           // HT_LOG_TRACE << "and output op " << op;
-          if (op->placement_group_union().has(local_device) && op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID) 
+          if (op->placement_group().contains(local_device) && op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->suggested_hetero_id()) 
               && !IsNoRecomputedOp(op) && recompute_subgraph.find(op->id()) == recompute_subgraph.end()) {
             to_visit.push(op_ref);
           }
@@ -142,9 +142,9 @@ Operator& Recompute::DuplicateRecomputedOp(const Operator& origin_op, const Op2O
   // 注意MakeCommOp在InferMeta时不得不特殊处理
   // 需要从外面把CUR_HETERO_ID传进去
   if (is_comm_op(origin_op) || is_parallel_attn_op(origin_op)) {
-    HT_ASSERT(origin_op->placement_group_union().has(local_device))
+    HT_ASSERT(origin_op->output(0)->placement_group_union().has(local_device))
       << "something wrong, new duplicated op should all be local";
-    origin_op->graph().CUR_HETERO_ID = origin_op->placement_group_union().get_index(local_device);
+    origin_op->graph().CUR_HETERO_ID = origin_op->output(0)->placement_group_union().get_index(local_device);
   }
   auto& new_op = Graph::MakeOp(origin_op->_body, std::move(new_inputs),
                                std::move(new_op_meta), cur_exec_graph);
@@ -167,9 +167,10 @@ Operator& Recompute::DuplicateRecomputedOp(const Operator& origin_op, const Op2O
     }
     cur_exec_graph.RecordExecTensor(new_output);
   }
-  if (origin_op->placement_group_union().size() != 0) {
-    new_op->MapToParallelDevices(origin_op->placement_group_union());
-    HT_LOG_TRACE << "[Recompute] make recompute op " << new_op << " with pg union = " << new_op->placement_group_union();
+  if (origin_op->num_outputs() > 0) {
+    new_op->MapToParallelDevices(origin_op->output(0)->placement_group_union());
+  } else {
+    new_op->MapToParallelDevices(origin_op->out_dep_linker()->placement_group_union());
   }
   new_op->Instantiate(origin_op->instantiation_ctx().placement, 
                       origin_op->instantiation_ctx().stream_index);
@@ -193,9 +194,9 @@ void Recompute::InsertRecomputedOps(const OpRefList& topo_order) {
   OpRefList candidate_recomputed_ops;
   for (auto& op_ref : topo_order) {
     auto& op = op_ref.get();
-    HT_LOG_TRACE << "[Recompute] " << op << " recompute is " << op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID);
-    if (!op->placement_group_union().has(local_device) 
-        || !op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->graph().SUGGESTED_HETERO_ID)
+    HT_LOG_TRACE << "[Recompute] " << op << " recompute is " << op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->suggested_hetero_id());
+    if (!op->placement_group().contains(local_device) 
+        || !op->op_meta().get_recompute(op->graph().COMPUTE_STRATEGY_ID, op->suggested_hetero_id())
         || IsNoRecomputedOp(op)) {
       continue;
     }
