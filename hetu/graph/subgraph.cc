@@ -132,7 +132,7 @@ void SubGraph::topo_sort(bool only_local) {
 // 输入输出全部存放在tensor2data中
 // 注意runtime_ctx中的allocation与skip仍然是适用的
 void SubGraph::run(Tensor2NDArrayMap& tensor2data, const Tensor2NDArrayMap& preserved_data, RuntimeContext& runtime_ctx,
-                   size_t micro_batch_id, SubGraphOpType subgraph_op_type, const OpHandler& op_handler) {
+                   size_t micro_batch_id, SubGraphOpType subgraph_op_type, bool use_concat_memory_optimization, const OpHandler& op_handler) {
   HT_ASSERT(_already_topo_sorted)
     << "cannot run before subgraph " << _global_name << " topo sort";
   std::reference_wrapper<OpRefList> topo_ref = std::ref(_ops_topo);
@@ -156,7 +156,6 @@ void SubGraph::run(Tensor2NDArrayMap& tensor2data, const Tensor2NDArrayMap& pres
   }
 
   // workaround: 针对batched-send-recv通信pattern的内存优化
-  bool use_concat_memory_optimization = true;
   std::vector<TensorId> alloc_concat_tensor_id_list;
   if (use_concat_memory_optimization) {
     for (auto it = topo_ref.get().rbegin(); it != topo_ref.get().rend(); ++it) {
@@ -227,7 +226,7 @@ void SubGraph::run(Tensor2NDArrayMap& tensor2data, const Tensor2NDArrayMap& pres
     // HT_LOG_INFO << "subgraph " << _global_name << " execute " << op << " begin";
     NDArrayList output_vals = op->Compute(input_vals, runtime_ctx, micro_batch_id);
     checkOutputsMemory(op, micro_batch_id, input_vals, output_vals);
-    op->instantiation_ctx().stream().Sync();
+    // op->instantiation_ctx().stream().Sync();
     // HT_LOG_INFO << "subgraph " << _global_name << " execute " << op << " end";
     // Note: The usage should be marked inside kernels, 
     // but we still mark here in case we forget to do so in some kernels. 

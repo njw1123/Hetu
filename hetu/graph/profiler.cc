@@ -222,7 +222,7 @@ void checkOutputsMemory(const Operator& op, size_t micro_batch_id, const NDArray
         // all_gather由于开启了共享的buffer不对其进行分析
         continue;
       }
-      HT_LOG_INFO << local_device << ": micro batch " << micro_batch_id << " " << op->output(i)
+      HT_LOG_DEBUG << local_device << ": micro batch " << micro_batch_id << " " << op->output(i)
         << " malloc new GPU memory with shape = " << output->shape()
         << ", ptr id = " << output->storage()->ptr_id();
       malloc_outputs_map[output->storage()->ptr_id()] = std::make_pair(micro_batch_id, op->output(i));

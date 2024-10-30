@@ -123,6 +123,10 @@ uint64_t CommOpImpl::get_comm_type(Operator& op, const Device& inferred, const C
   if (info.src_group_union.size() != info.dst_group_union.size() || !info.src_ds_union.split_pattern().is_contiguous()) {
     HT_ASSERT(no_reduction)
       << "no reduce should be included if union size mismatches or have uncontiguous input";
+    if (info.src_ds_union.check_equal(info.dst_ds_union) && info.src_group_union.check_equal(info.dst_group_union)) {
+      _comm_type = UNUSED_OP; 
+      return _comm_type;
+    }
     // 看是否可以split all gather
     // 条件还是比较苛刻的
     bool can_split_all_gather = true;
@@ -786,7 +790,7 @@ bool P2PSendOpImpl::DoInstantiate(Operator& op, const Device& placement,
   std::vector<int> ranks(2);
   ranks[0] = std::min(src_rank, dst_rank);
   ranks[1] = std::max(src_rank, dst_rank);
-  if (dynamic_cast<ExecutableGraph&>(op->graph()).p2p_single_communicator()) {
+  if (op->graph().type() == GraphType::EXECUTABLE && dynamic_cast<ExecutableGraph&>(op->graph()).p2p_single_communicator()) {
     NCCLCommunicationGroup::GetOrCreate(_all_ranks, op->instantiation_ctx().stream());
   } else {
     NCCLCommunicationGroup::GetOrCreate(ranks, op->instantiation_ctx().stream());
@@ -820,7 +824,7 @@ void P2PSendOpImpl::DoCompute(Operator& op,
   auto dst_rank = DeviceToWorldRank(_dst_group.get(dst_device_index));
   comm_group_ranks[0] = std::min(src_rank, dst_rank);
   comm_group_ranks[1] = std::max(src_rank, dst_rank);
-  if (dynamic_cast<ExecutableGraph&>(op->graph()).p2p_single_communicator()) {
+  if (op->graph().type() == GraphType::EXECUTABLE && dynamic_cast<ExecutableGraph&>(op->graph()).p2p_single_communicator()) {
     comm_group_ranks = _all_ranks;
   }
 
@@ -848,7 +852,7 @@ bool P2PRecvOpImpl::DoInstantiate(Operator& op, const Device& placement,
   std::vector<int> ranks(2);
   ranks[0] = std::min(src_rank, dst_rank);
   ranks[1] = std::max(src_rank, dst_rank);
-  if (dynamic_cast<ExecutableGraph&>(op->graph()).p2p_single_communicator()) {
+  if (op->graph().type() == GraphType::EXECUTABLE && dynamic_cast<ExecutableGraph&>(op->graph()).p2p_single_communicator()) {
     NCCLCommunicationGroup::GetOrCreate(_all_ranks, op->instantiation_ctx().stream());
   } else {
     NCCLCommunicationGroup::GetOrCreate(ranks, op->instantiation_ctx().stream());
@@ -878,7 +882,7 @@ void P2PRecvOpImpl::DoCompute(Operator& op,
   auto dst_rank = GetWorldRank();
   comm_group_ranks[0] = std::min(src_rank, dst_rank);
   comm_group_ranks[1] = std::max(src_rank, dst_rank);
-  if (dynamic_cast<ExecutableGraph&>(op->graph()).p2p_single_communicator()) {
+  if (op->graph().type() == GraphType::EXECUTABLE && dynamic_cast<ExecutableGraph&>(op->graph()).p2p_single_communicator()) {
     comm_group_ranks = _all_ranks;
   }
 

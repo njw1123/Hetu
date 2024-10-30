@@ -161,13 +161,13 @@ void ParamBuffer::Alloc(const Stream& stream,
                         ncclComm_t comm,
                         bool use_caching_mempool,
                         bool use_async) {
+  HT_ASSERT(!(use_nccl && use_caching_mempool) && !(use_nccl && use_async) && !(use_caching_mempool && use_async))
+    << "ParamBuffer cannot simutaneouly use two of the three: nccl buffer malloc, caching mempool malloc and async malloc";
   TIK(alloc_time);
   auto local_device = hetu::impl::comm::GetLocalDevice(); 
   hetu::cuda::CUDADeviceGuard guard(local_device.index());
-  HT_LOG_INFO << local_device << ": " << _name << " param buffer"
+  HT_LOG_DEBUG << local_device << ": " << _name << " param buffer"
     << " will alloc " << (double)_buffer_size / (1024 * 1024) << " MiB";  
-#if defined(NCCL_MAJOR) && defined(NCCL_MINOR) && (NCCL_MAJOR >= 2) && (NCCL_MINOR >= 19) 
-  // HT_RUNTIME_ERROR << "NotImplementedError";
   if (use_nccl) {
     HT_ASSERT(comm != nullptr)
       << "nccl buffer registration must have a communicator";
@@ -197,7 +197,8 @@ void ParamBuffer::Alloc(const Stream& stream,
         HT_LOG_DEBUG << local_device << ": " << _name << " param buffer free end";  
         TOK(free_time);
         _free_time = COST_MSEC(free_time);
-      }));
+      })
+    );
   } else {
     if (use_caching_mempool) {
       if (!hetu::impl::AllocAfterFreeFromCUDACache(local_device, _raw_ptr, _buffer_size)) {
@@ -220,65 +221,26 @@ void ParamBuffer::Alloc(const Stream& stream,
         TIK(free_time);
         hetu::cuda::CUDADeviceGuard guard(data_ptr.device.index());
         HT_LOG_DEBUG << local_device << ": " << _name << " param buffer"
-          << " will free " << (double)_buffer_size / (1024 * 1024) << " MiB";  
-        cudaError_t status;
-        if (!use_async || stream.is_blocking()) {
-          status = cudaFree(data_ptr.ptr);
+          << " will free " << (double)_buffer_size / (1024 * 1024) << " MiB"; 
+        if (use_caching_mempool) {
+          hetu::impl::FreeFromCUDACache(local_device, data_ptr.ptr);
         } else {
-          status = cudaFreeAsync(data_ptr.ptr, hetu::impl::CUDAStream(stream).cuda_stream());
+          cudaError_t status;
+          if (!use_async || stream.is_blocking()) {
+            status = cudaFree(data_ptr.ptr);
+          } else {
+            status = cudaFreeAsync(data_ptr.ptr, hetu::impl::CUDAStream(stream).cuda_stream());
+          }
+          if (status != cudaSuccess) {
+            HT_RUNTIME_ERROR << "cudaFree failed: " << cudaGetErrorString(status);
+          }
         }
-        if (status != cudaSuccess) {
-          HT_RUNTIME_ERROR << "cudaFree failed: " << cudaGetErrorString(status);
-        }
-        HT_LOG_INFO << local_device << ": " << _name << " param buffer free end";  
+        HT_LOG_DEBUG << local_device << ": " << _name << " param buffer free end";  
         TOK(free_time);
         _free_time = COST_MSEC(free_time);
-      }));
+      })
+    );
   }
-#else
-  // Use AllocDataSpace will cause OOM
-  /*
-  // Note that we need to use comm_stream_idx for BufferBatchedIsendIrecv
-  _storage = std::make_shared<NDArrayStorage>(AllocFromMemoryPool(local_device, _buffer_size, stream));
-  _raw_ptr = _storage->mutable_data();
-  */
-  // Use BorrowDataSpace
-  if (use_caching_mempool) {
-    if (!hetu::impl::AllocAfterFreeFromCUDACache(local_device, _raw_ptr, _buffer_size)) {
-      HT_RUNTIME_ERROR << "cudaMalloc failed (OOM) when trying to allocate " << _name << " param buffer"
-        << ", though releasing some data space from the caching mempool";
-    }
-  } else {
-    cudaError_t status;
-    if (!use_async || stream.is_blocking()) {
-      status = cudaMalloc(&_raw_ptr, _buffer_size);
-    } else {
-      status = cudaMallocAsync(&_raw_ptr, _buffer_size, hetu::impl::CUDAStream(stream).cuda_stream());
-    }
-    if (status != cudaSuccess) {
-      HT_RUNTIME_ERROR << "cudaMalloc failed: " << cudaGetErrorString(status);
-    }
-  }
-  _storage = std::make_shared<NDArrayStorage>(BorrowToMemoryPool(
-    local_device, _raw_ptr, _buffer_size, [=](DataPtr data_ptr) {
-      TIK(free_time);
-      hetu::cuda::CUDADeviceGuard guard(data_ptr.device.index());
-      HT_LOG_DEBUG << local_device << ": " << _name << " param buffer"
-        << " will free " << (double)_buffer_size / (1024 * 1024) << " MiB";  
-      cudaError_t status;
-      if (!use_async || stream.is_blocking()) {
-        status = cudaFree(data_ptr.ptr);
-      } else {
-        status = cudaFreeAsync(data_ptr.ptr, hetu::impl::CUDAStream(stream).cuda_stream());
-      }
-      if (status != cudaSuccess) {
-        HT_RUNTIME_ERROR << "cudaFree failed: " << cudaGetErrorString(status);
-      }
-      HT_LOG_INFO << local_device << ": " << _name << " param buffer free end";  
-      TOK(free_time);
-      _free_time = COST_MSEC(free_time);
-    }));
-#endif
   _stream = stream;
   _is_allocated = true;
   TOK(alloc_time);
@@ -617,6 +579,7 @@ void SwitchExecGraph::MakeAllParamSlices(const Tensor& param, ParamBlock& block,
     auto split_output = MakeSplitOp(param, 
                                     indices, 
                                     splits, 
+                                    true,
                                     OpMeta().set_name(param_slice->name()).set_is_deduce_states(false));
     auto& split_op = split_output->producer();
     // 其他device上生成的不需要map placement_group和placement
@@ -735,7 +698,7 @@ Tensor SwitchExecGraph::MergeAllParamSlices(const Tensor& param, ParamBlock& blo
 void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, const DeviceGroupUnion& src_group_union,
                                   const DistributedStatesUnion& dst_ds_union, const DeviceGroupUnion& dst_group_union,
                                   const Tensor& comm_input, const Tensor& after_param, const SyShape& sy_global_shape, 
-                                  const StreamIndex comp_stream_idx) {
+                                  const StreamIndex comp_stream_idx, bool ignore_shape_mismatch) {
   // safety check
   HT_ASSERT(src_ds_union.size() == src_group_union.size() && dst_ds_union.size() == dst_group_union.size())
     << "union size mismatches";
@@ -930,14 +893,19 @@ void SwitchExecGraph::SwitchParam(const DistributedStatesUnion& src_ds_union, co
       // 如果是local的result
       // 记录result以及其与after graph param的映射
       if (local_device == dst_group.get(i)) {
-        HT_ASSERT(result->shape() == after_param->shape())
-          << local_device << ": result shape mismatches for " << after_param
-          << ", the global shape is " << get_HTShape_from_SyShape(sy_global_shape)
-          << ", the slice shape is " << get_HTShape_from_SyShape(sy_slice_shape)
-          << ", the src ds union is " << src_ds_union.ds_union_info()
-          << ", the dst ds union is " << dst_ds_union.ds_union_info()
-          << ", the shape in comm graph is " << result->shape()
-          << ", but the shape in after graph is " << after_param->shape();
+        // workaround: dp是奇数时reduce-scatter后无法对齐shape
+        // 暂时把此处的assert去掉
+        // TODO: precison-aligned hot switch for mismatched shape case
+        if (!ignore_shape_mismatch) {
+          HT_ASSERT(result->shape() == after_param->shape())
+            << local_device << ": result shape mismatches for " << after_param
+            << ", the global shape is " << get_HTShape_from_SyShape(sy_global_shape)
+            << ", the slice shape is " << get_HTShape_from_SyShape(sy_slice_shape)
+            << ", the src ds union is " << src_ds_union.ds_union_info()
+            << ", the dst ds union is " << dst_ds_union.ds_union_info()
+            << ", the shape in comm graph is " << result->shape()
+            << ", but the shape in after graph is " << after_param->shape();
+        }
         _comm_results_mapping.insert(std::make_pair(result->id(), after_param));
         _comm_results.push_back(std::move(result));
       }
@@ -2066,7 +2034,7 @@ void SwitchExecGraph::ProfileRunningDetails() {
 }
 
 // support symbolic shape
-Tensor ComplexExecComm::Instantiate(StreamIndex comm_stream_idx) {
+Tensor ComplexExecComm::Instantiate(StreamIndex comm_stream_idx, bool ignore_shape_mismatch) {
   if (_is_instantiated) {
     HT_RUNTIME_ERROR << "already inserted the repartition op";
   }
@@ -2086,8 +2054,15 @@ Tensor ComplexExecComm::Instantiate(StreamIndex comm_stream_idx) {
     << "local device is not in the comm group";
   HT_ASSERT(src_ds.states(-2) == dst_ds.states(-2))
     << "src ds and dst ds should have same partial";
-  HT_ASSERT(comm_input->global_shape() == comm_output->global_shape())
-    << "src global shape should be equal to dst global shape";
+  // workaround: dp是奇数时reduce-scatter后无法对齐global shape
+  // 暂时把此处的assert去掉
+  // TODO: precison-aligned hot switch for mismatched shape case
+  if (!ignore_shape_mismatch) {
+    HT_ASSERT(comm_input->global_shape() == comm_output->global_shape())
+      << "src global shape should be equal to dst global shape"
+      << ", but found " << comm_input << " global shape is " << comm_input->global_shape()
+      << " and " << comm_output << " global shape is " << comm_output->global_shape();
+  }
   // 因为要支持single exec graph multi shape plan
   // 所以这里要设置symbolic shape
   if (!comm_input->symbolic()) {
@@ -2156,7 +2131,7 @@ Tensor ComplexExecComm::Instantiate(StreamIndex comm_stream_idx) {
       << ", partial dst group = " << partial_dst_group;
     */
     // 这里slice与concat还是正常的kComputingStream
-    SwitchParam({{partial_src_ds}}, {{partial_src_group}}, {{partial_dst_ds}}, {{partial_dst_group}}, comm_input, comm_output, sy_global_shape, kComputingStream);
+    SwitchParam({{partial_src_ds}}, {{partial_src_group}}, {{partial_dst_ds}}, {{partial_dst_group}}, comm_input, comm_output, sy_global_shape, kComputingStream, ignore_shape_mismatch);
   }
   // Hydraulis hetero optimize-compute or compute-optimize bridge op
   else {
@@ -2190,7 +2165,7 @@ Tensor ComplexExecComm::Instantiate(StreamIndex comm_stream_idx) {
       << ", dst group union = " << _comm_info.dst_group_union;
     */
     // 为了compute和comm的overlap这里slice与concat也使用comm_stream
-    SwitchParam(_comm_info.src_ds_union, _comm_info.src_group_union, _comm_info.dst_ds_union, _comm_info.dst_group_union, comm_input, comm_output, sy_global_shape, comm_stream_idx);
+    SwitchParam(_comm_info.src_ds_union, _comm_info.src_group_union, _comm_info.dst_ds_union, _comm_info.dst_group_union, comm_input, comm_output, sy_global_shape, comm_stream_idx, ignore_shape_mismatch);
   }
   HT_ASSERT(_param_blocks.size() == 1)
     << "size wrong";

@@ -390,7 +390,13 @@ void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
           }
         }
         auto complex_exec_comm = ComplexExecComm(comm_op, info, comm_set);
-        result = complex_exec_comm.Instantiate(suggested_comm_stream_idx);
+        // workaround: bridge subgraph may allow mismatched global shape due to non-integer reduce-scatter problem
+        if (_shape_mismatch_flag > 0 && (comm_subgraph->subgraph_type() == SubGraphType::OPTIMIZE_COMPUTE_BRIDGE || comm_subgraph->subgraph_type() == SubGraphType::COMPUTE_OPTIMIZE_BRIDGE)) {
+          ignore_flag = true;
+        }
+        // HT_LOG_INFO << comm_op << " ignore shape mismatch flag is " << ignore_flag;
+        result = complex_exec_comm.Instantiate(suggested_comm_stream_idx, ignore_flag);
+        result->set_cur_ds_union(info.dst_ds_union); 
         HT_LOG_DEBUG << local_device << ": substitute " << comm_op << " to batched_isend_irecv_op";
         determine_flag = true;
       }
@@ -472,7 +478,7 @@ void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
         }
         HT_LOG_DEBUG << local_device << ": keys = " << keys << "; indices = " << indices << "; splits = " << splits;
         Tensor split_output = MakeSplitOp(
-          result, keys, indices, splits, 
+          result, keys, indices, splits, true,
           OpMeta().set_is_deduce_states(false));
         RecordExecTensor(split_output);
         auto& split_op = split_output->producer();
@@ -493,7 +499,7 @@ void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
         HTAxes keys = {0};
         HTShape indices = {indice};
         HTShape splits = {split_num};
-        Tensor scatter_output = MakeSplitOp(result, keys, indices, splits, OpMeta().set_is_deduce_states(false));
+        Tensor scatter_output = MakeSplitOp(result, keys, indices, splits, true, OpMeta().set_is_deduce_states(false));
         RecordExecTensor(scatter_output);
         auto& scatter_op = scatter_output->producer();
         scatter_op->MapToParallelDevices(info.src_group_union);
@@ -969,8 +975,27 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
         tensor2data[output->id()] = output_vals[i];
       } 
     }
-  // op->instantiation_ctx().stream().Sync();
-  // HT_LOG_INFO << local_device << ": micro batch " << micro_batch_id << " op execute " << op << " end...";
+    // op->instantiation_ctx().stream().Sync();
+    // HT_LOG_INFO << local_device << ": micro batch " << micro_batch_id << " op execute " << op << " end...";
+
+    // 提前执行PostRun中的grad reduce
+    // workaround: 这部分逻辑is out of topo sort
+    for (auto& output : op->outputs()) {
+      auto grad_reduce_subgraph_it = _grad_reduce_subgraph_map.find(output->id());
+      if (grad_accumulation_finished && _overlap_grad_reduce && grad_reduce_subgraph_it != _grad_reduce_subgraph_map.end()) {
+        // HT_LOG_INFO << "execute grad reduce for " << output << " begin...";
+        grad_reduce_subgraph_it->second->run(tensor2data, _preserved_data, runtime_ctx, micro_batch_id, SubGraphOpType::UPDATE, false,
+          [this](Operator& op, Tensor2NDArrayMap& tensor2data, size_t micro_batch_id) {
+            OpHandlerStatus status; 
+            if (!is_grad_reduce_op(op)) {
+              status.need_skip = true;
+            }
+            return status; 
+          }
+        );
+        // HT_LOG_INFO << "execute grad reduce for " << op << " end...";
+      }
+    }
   }
 }
 
@@ -1003,6 +1028,40 @@ void ExecutableGraph::GetExecEnvs() {
   } else {
     // 默认不使用single communicator
     _bridge_single_communicator = false;
+  }
+
+  env = std::getenv("HETU_OVERLAP_GRAD_REDUCE");
+  _overlap_grad_reduce = false;
+  if (env != nullptr) {
+    if (std::string(env) == "FIRST_STAGE") {
+      auto local_device = hetu::impl::comm::GetLocalDevice();
+      if (_pipeline_map.find(local_device) != _pipeline_map.end()) {
+        HT_ASSERT(_pipeline_map[local_device].size() >= 1)
+          << "pipeline should have at least one stage";
+        if (_pipeline_map[local_device].front().contains(local_device)) {
+          // 只有第一个stage去overlap
+          _overlap_grad_reduce = true;
+        }
+      } 
+    } else if (std::string(env) == "ALL_STAGES") {
+      _overlap_grad_reduce = true;
+    } else {
+      HT_RUNTIME_ERROR << "Unknown hetu dp overlap setting: " + std::string(env);
+    }
+  }
+
+  env = std::getenv("HETU_SHAPE_MISMATCH");
+  if (env != nullptr) {
+    if (std::string(env) == "NO_MISMATCH") {
+      _shape_mismatch_flag = 0;
+    } else if (std::string(env) == "BRIDGE_SUBGRAPH") {
+      _shape_mismatch_flag = 1;
+    } else {
+      HT_RUNTIME_ERROR << "Unknown hetu shape mismatch setting: " + std::string(env);
+    }
+  } else {
+    // 默认没有shape mismatch
+    _shape_mismatch_flag = 0;
   }
 
   env = std::getenv("HETU_STRAGGLER");
@@ -1800,8 +1859,30 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
       _compute_optimize_bridge_subgraph_map[param->producer()->id()]->topo_sort();
       const auto& transfer_topo = _optimize_compute_bridge_subgraph_map[param->producer()->id()]->ops_topo();
       const auto& update_topo = _compute_optimize_bridge_subgraph_map[param->producer()->id()]->update_ops_topo();
-      HT_LOG_INFO << param << " corresponding transfer topo is " << transfer_topo;
-      HT_LOG_INFO << param << " corresponding update topo is " << update_topo;
+      // HT_LOG_INFO << param << " corresponding transfer subgraph " << _optimize_compute_bridge_subgraph_map[param->producer()->id()]->global_name() << " topo is " << transfer_topo;
+      // HT_LOG_INFO << param << " corresponding update subgraph " << _compute_optimize_bridge_subgraph_map[param->producer()->id()]->global_name() << " topo is " << update_topo;
+      /*
+      if (_dp_overlap) {
+        auto parent_transfer_subgraph = _optimize_compute_bridge_subgraph_map[param->producer()->id()]->parent_graph();
+        auto parent_update_subgraph = _compute_optimize_bridge_subgraph_map[param->producer()->id()]->parent_graph();
+        HT_ASSERT(parent_transfer_subgraph != nullptr && parent_transfer_subgraph->subgraph_type() == SubGraphType::MODULE
+                  && parent_update_subgraph != nullptr && parent_update_subgraph->subgraph_type() == SubGraphType::MODULE
+                  && parent_transfer_subgraph == parent_update_subgraph)
+          << "the parent subgraph shoud be exactly the same";
+        auto parent_module = parent_transfer_subgraph;
+        parent_module->topo_sort();
+        HT_LOG_INFO << parent_module->global_name() << " fwd topo is " << parent_module->ops_topo();
+        HT_LOG_INFO << parent_module->global_name() << " bwd topo is " << parent_module->bwd_ops_topo();
+      }
+      */
+      // 把每个grad reduce算子的上一个算子取出来
+      if (_overlap_grad_reduce) {
+        if (update_topo.size() >= 1) {
+          if (is_grad_reduce_op(update_topo.front())) {
+            _grad_reduce_subgraph_map[update_topo.front().get()->input(0)->id()] = _compute_optimize_bridge_subgraph_map[param->producer()->id()];
+          }
+        }
+      }
       for (auto& transfer_op_ref : transfer_topo) {
         // batched send recv可能没有output
         if (transfer_op_ref.get()->num_outputs() >= 1) {
@@ -1840,10 +1921,12 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
         HT_ASSERT(transfer_it != _transfer_map.end())
           << "cannot find the mapping of " << param << " in the transfer map";
         auto& transfer_in_buffer = transfer_it->second;
-        HT_ASSERT(transfer_in_buffer->meta() == final_transfer->meta())
-          << "the meta of the transfer before/after substitute comm op should be equal"
-          << ", but meta of transfer in buffer is " << transfer_in_buffer->meta()
-          << ", and meta of transfer is " << final_transfer->meta();
+        if (_shape_mismatch_flag == 0) {
+          HT_ASSERT(transfer_in_buffer->meta() == final_transfer->meta())
+            << "the meta of the transfer before/after substitute comm op should be equal"
+            << ", but meta of transfer in buffer is " << transfer_in_buffer->meta()
+            << ", and meta of transfer is " << final_transfer->meta();
+        }
         HT_ASSERT(transfer_in_buffer->cur_ds_union().check_equal(final_transfer->cur_ds_union()))
           << "the ds union of the transfer before/after substitute comm op should be equal"
           << ", but found " << transfer_in_buffer << ": " << transfer_in_buffer->cur_ds_union().ds_union_info()
@@ -1869,10 +1952,12 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
         HT_ASSERT(grad_it != _grad_map.end())
           << "cannot find the mapping of " << param << " in the grad map";
         auto& grad_in_buffer = grad_it->second;
-        HT_ASSERT(grad_in_buffer->meta() == final_grad->meta())
-          << "the meta of the grad before/after substitute comm op should be equal"
-          << ", but meta of grad in buffer is " << grad_in_buffer->meta()
-          << ", and meta of grad is " << final_grad->meta();
+        if (_shape_mismatch_flag == 0) {
+          HT_ASSERT(grad_in_buffer->meta() == final_grad->meta())
+            << "the meta of the grad before/after substitute comm op should be equal"
+            << ", but meta of grad in buffer is " << grad_in_buffer->meta()
+            << ", and meta of grad is " << final_grad->meta();
+        }
         HT_ASSERT(grad_in_buffer->cur_ds_union().check_equal(final_grad->cur_ds_union()))
           << "the ds union of the grad before/after substitute comm op should be equal"
           << ", but found " << grad_in_buffer << ": " << grad_in_buffer->cur_ds_union().ds_union_info()
@@ -1894,10 +1979,12 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
     // 这里直接将substitute后的param buffer替换掉define graph中生成的
     for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
       DataType dtype = static_cast<DataType>(i);
-      HT_ASSERT(_transfer_param_buffer_map[dtype]->size() == substitute_transfer_param_buffer_map[dtype]->size()
-                && _current_grad_buffer_map[dtype]->size() == substitute_current_grad_buffer_map[dtype]->size()
-                && _accumulate_grad_buffer_map[dtype]->size() == substitute_accumulate_grad_buffer_map[dtype]->size())
-        << "buffer size should be equal";
+      if (_shape_mismatch_flag == 0) {
+        HT_ASSERT(_transfer_param_buffer_map[dtype]->size() == substitute_transfer_param_buffer_map[dtype]->size()
+                  && _current_grad_buffer_map[dtype]->size() == substitute_current_grad_buffer_map[dtype]->size()
+                  && _accumulate_grad_buffer_map[dtype]->size() == substitute_accumulate_grad_buffer_map[dtype]->size())
+          << "buffer size should be equal";
+      }
       _transfer_param_buffer_map[dtype] = substitute_transfer_param_buffer_map[dtype];
       _current_grad_buffer_map[dtype] = substitute_current_grad_buffer_map[dtype];
       _accumulate_grad_buffer_map[dtype] = substitute_accumulate_grad_buffer_map[dtype];

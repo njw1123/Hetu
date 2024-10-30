@@ -27,7 +27,8 @@ class Bucket:
                 padded_batch.append(np.concatenate([self._batch[i], np.array([self._pad_token] * pad_seqlen)]))
             else:
                 padded_batch.append(self._batch[i])
-            padded_cu_seqlens_list.append(self._cu_seqlens_list[i])
+            # padded_cu_seqlens_list.append(self._cu_seqlens_list[i])
+            padded_cu_seqlens_list.append(self._max_seqlen) # 应该使用pad后的max_seqlen
         self._padded_batch = padded_batch
         self._padded_cu_seqlens_list = padded_cu_seqlens_list
 

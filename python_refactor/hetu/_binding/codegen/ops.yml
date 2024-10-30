@@ -288,18 +288,18 @@
 
 - name: split
   op: SplitOp
-  args: Tensor input, int64_t num_chunks, int64_t dim
+  args: Tensor input, int64_t num_chunks, int64_t dim, bool remain=False
   self: input
 
 # deprecated: only used in gpt inference, before symbolic shape is realized
 - name: split
   op: SplitOp
-  args: Tensor input, int64_t num_chunks, int64_t dim, int64_t padding_axis
+  args: Tensor input, int64_t num_chunks, int64_t dim, int64_t padding_axis, bool remain=False
   self: input
 
 - name: split
   op: SplitOp
-  args: Tensor input, HTShape chunks, int64_t dim
+  args: Tensor input, HTShape chunks, int64_t dim, bool remain=False
   self: input
 
 - name: transpose

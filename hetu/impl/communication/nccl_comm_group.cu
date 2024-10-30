@@ -2,6 +2,8 @@
 #include "hetu/impl/communication/mpi_comm_group.h"
 #include "hetu/impl/stream/CUDAStream.h"
 #include "hetu/impl/utils/ndarray_utils.h"
+#include "hetu/graph/graph.h"
+#include "hetu/graph/executable_graph.h"
 #include "hetu/utils/task_queue.h"
 #include "hetu/core/ndarray_storage.h"
 #include <numeric>
@@ -102,6 +104,14 @@ static void NCCL_Init_Once() {
               }) == 0)
       << "Failed to register the exit function for NCCL.";
   });
+}
+
+static int32_t get_shape_mismatch_flag() {
+  auto& graph = hetu::graph::Graph::GetGraph(hetu::graph::Graph::cur_graph_ctx());
+  if (graph.type() == hetu::graph::GraphType::EXECUTABLE) {
+    return dynamic_cast<hetu::graph::ExecutableGraph&>(graph).shape_mismatch_flag();
+  }
+  return 0;
 }
 
 } // namespace
@@ -406,11 +416,18 @@ void NCCLCommunicationGroupDef::ReduceScatter(const NDArray& input,
   HT_ASSERT_SAME_DTYPE(input, output);
   size_t input_size = input->numel();
   size_t output_size = output->numel();
-  HT_ASSERT(input->shape(scatter_dim) == output->shape(scatter_dim) * _size &&
-            input_size == output_size * _size)
-    << "Invalid shapes for ReduceScatter: "
-    << "(send) " << input->shape() << " vs. "
-    << "(recv) " << output->shape() << ".";
+  if (get_shape_mismatch_flag() == 0) {
+    HT_ASSERT(input->shape(scatter_dim) == output->shape(scatter_dim) * _size &&
+              input_size == output_size * _size)
+      << "Invalid shapes for ReduceScatter: "
+      << "(send) " << input->shape() << " vs. "
+      << "(recv) " << output->shape() << ".";
+  }
+  // workaround
+  // precision will not be aligned if we use mismatched shape
+  else {
+    output_size = (input_size / input->shape(scatter_dim)) * (input->shape(scatter_dim) / _size);
+  }
   input_size = (input->dtype() == kNFloat4 || input->dtype() == kFloat4)  
              ? (input_size + 1) / 2
              : input_size;

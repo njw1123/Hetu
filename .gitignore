@@ -21,6 +21,7 @@ third_party/nccl/
 
 examples/hydraulis/data/
 examples/hydraulis/*.pkl
+examples/hydraulis/func_call/
 
 # Python
 *.png

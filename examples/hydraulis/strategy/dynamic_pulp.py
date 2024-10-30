@@ -1,13 +1,14 @@
 import pulp
 import time
 import json
-import sys
+import random
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from .cost_model import dynamic_strategy_time_cost
 
 # 返回batch_seqlen_array中应该归属于当前strategy的indices
+# 保证返回的indices按照从小到大的顺序排列
 def dynamic_strategy(strategy_pool, strategy_id_list: List[int], max_seqlen_list: List[int], cur_strategy_relative_id: int, batch_seqlen_array: np.ndarray):
     # 先按照max_seqlen从大到小的顺序对strategy排序
     indices = list(range(len(strategy_id_list)))
@@ -15,9 +16,80 @@ def dynamic_strategy(strategy_pool, strategy_id_list: List[int], max_seqlen_list
     sorted_cur_strategy_relative_id = sorted_indices.index(cur_strategy_relative_id)
     sorted_strategy_id_list = [strategy_id_list[i] for i in sorted_indices]
     sorted_max_seqlen_list = [max_seqlen_list[i] for i in sorted_indices]
-    print(f"Dynamic strategy, sorted_max_seqlen_list is {max_seqlen_list}, considering batch_seqlen_array {batch_seqlen_array.tolist()}")
+    # print(f"Dynamic strategy, sorted_strategy_id_list is {sorted_strategy_id_list}, sorted_cur_strategy_relative_id is {sorted_cur_strategy_relative_id}, sorted_max_seqlen_list is {max_seqlen_list}, considering batch_seqlen_array {batch_seqlen_array.tolist()}")
     # 线性规划输入数据
     assert len(batch_seqlen_array.shape) == 1, "sorted_len shape must be [global_batch_size,]"
+    
+    use_greedy_algorithm = False
+    if use_greedy_algorithm:
+        DP = len(sorted_strategy_id_list)
+        accumulate_cost = [0 for _ in range(DP)]
+        res = []
+        # 从大到小分配seq到当前累积开销最小的dp中
+        for seq_id, seqlen in enumerate(batch_seqlen_array):
+            select_dp_id = None
+            min_max_accumulate_cost = float('inf')
+            for dp_id in range(DP):
+                if sorted_max_seqlen_list[dp_id] < seqlen:
+                    continue
+                cost = dynamic_strategy_time_cost(strategy_pool, sorted_strategy_id_list[dp_id], seqlen) 
+                accumulate_cost[dp_id] += cost
+                max_accumulate_cost = max(accumulate_cost)
+                accumulate_cost[dp_id] -= cost
+                if max_accumulate_cost < min_max_accumulate_cost:
+                    select_dp_id = dp_id
+                    min_max_accumulate_cost = max_accumulate_cost
+            assert select_dp_id != None, f"cannot select a proper dp to place a sequence with length {seqlen}"
+            accumulate_cost[select_dp_id] += dynamic_strategy_time_cost(strategy_pool, sorted_strategy_id_list[select_dp_id], seqlen) 
+            if select_dp_id == sorted_cur_strategy_relative_id:
+                res.append(seq_id)
+        assert len(res) > 0, "currently not support zero seqs"
+        return (max(accumulate_cost), res)
+    
+    use_random_greedy_algorithm = True
+    num_trials = 100
+    if use_random_greedy_algorithm:
+        original_indices = list(range(len(batch_seqlen_array)))  # 原始的索引顺序
+        best_accumulate_cost = float('inf')  # 记录最优的最大累积开销
+        best_res = None  # 记录最优的分配结果
+        for trial in range(num_trials):
+            random.seed(trial)
+            # 打乱 batch_seqlen_array 的顺序
+            shuffled_indices = original_indices.copy()
+            random.shuffle(shuffled_indices)
+            shuffled_batch_seqlen_array = batch_seqlen_array[shuffled_indices]
+            DP = len(strategy_id_list)
+            accumulate_cost = [0 for _ in range(DP)]
+            res = []
+            # 从大到小分配seq到当前累积开销最小的dp中
+            for shuffled_seq_id, seqlen in enumerate(shuffled_batch_seqlen_array):
+                select_dp_id = None
+                min_max_accumulate_cost = float('inf')
+                for dp_id in range(DP):
+                    if max_seqlen_list[dp_id] < seqlen:
+                        continue
+                    cost = dynamic_strategy_time_cost(strategy_pool, sorted_strategy_id_list[dp_id], seqlen) 
+                    accumulate_cost[dp_id] += cost
+                    max_accumulate_cost = max(accumulate_cost)
+                    accumulate_cost[dp_id] -= cost
+                    if max_accumulate_cost < min_max_accumulate_cost:
+                        select_dp_id = dp_id
+                        min_max_accumulate_cost = max_accumulate_cost
+                assert select_dp_id is not None, f"Cannot select a proper dp to place a sequence with length {seqlen}"
+                accumulate_cost[select_dp_id] += dynamic_strategy_time_cost(strategy_pool, sorted_strategy_id_list[select_dp_id], seqlen)
+                if select_dp_id == sorted_cur_strategy_relative_id:
+                    res.append(shuffled_indices[shuffled_seq_id])  # 记录原始索引
+            assert len(res) > 0, "Currently not support zero seqs"
+            # 记录当前尝试的最大累积开销
+            current_max_accumulate_cost = max(accumulate_cost)
+            # 如果当前尝试的最大累积开销比之前的最优解小，则更新最优解
+            if current_max_accumulate_cost < best_accumulate_cost:
+                best_accumulate_cost = current_max_accumulate_cost
+                best_res = res
+        best_res = sorted(best_res)
+        # 返回最优解
+        return (best_accumulate_cost, best_res)
+                
     B = len(batch_seqlen_array)  # 序列条数
     DP = len(sorted_strategy_id_list)  # 数据并行个数
     S = batch_seqlen_array  # 序列长度
@@ -150,10 +222,11 @@ def batching_strategy(strategy_pool, strategy_id: int, seqs: List[int], max_seql
                 optimal_o = o_values
                 optimal_v = v
     if not isinstance(optimal_o, np.ndarray):
-        raise RuntimeError("cannot gurantee the sequence ultilization for all DP")
-        sys.exit(1)
+        # raise RuntimeError("cannot gurantee the sequence ultilization for all DP")
+        # sys.exit(1)
+        return float('inf'), None
     # print(f"Optimal e2e cost of the pipeline is {optimal_e2e_cost}")
-    return (optimal_e2e_cost, optimal_o)
+    return optimal_e2e_cost, optimal_o
 
 if __name__ == '__main__':
     # 读取并打印strategy数据

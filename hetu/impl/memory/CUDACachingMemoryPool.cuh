@@ -52,6 +52,8 @@ struct AvailableEventLookupTable {
 
 bool AllocAfterFreeFromCUDACache(const Device& device, void*& ptr, size_t size);
 
+void FreeFromCUDACache(const Device& device, void* ptr);
+
 void ProfileAfterEmptyAllCUDACache(const Device& device);
 
 class CUDACachingMemoryPool final : public CUDAMemoryPool {
@@ -59,6 +61,10 @@ class CUDACachingMemoryPool final : public CUDAMemoryPool {
   CUDACachingMemoryPool(DeviceIndex device_id, size_t _max_split_size, size_t _max_internal_fragment_size, size_t _pre_allocate_size);
 
   ~CUDACachingMemoryPool();
+
+  bool UseMemoryManager() const {
+    return _memory_manager != nullptr;
+  }
 
   size_t GetCurrAllocated() {
     return _allocated;
@@ -94,6 +100,8 @@ class CUDACachingMemoryPool final : public CUDAMemoryPool {
   void EmptyCache() override;
 
   friend bool AllocAfterFreeFromCUDACache(const Device& device, void*& ptr, size_t size);
+
+  friend void FreeFromCUDACache(const Device& device, void* ptr);
 
   friend void ProfileAfterEmptyAllCUDACache(const Device& device);
 

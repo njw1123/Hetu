@@ -1492,7 +1492,9 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
           DataType dtype = static_cast<DataType>(i);
           _param_switcher_pool[key][dtype]->SwitchParams(param_switch_mode, param_switch_level, "switch transfer params " + DataType2Str(dtype));
         }
-        is_transfer_param_hot_switch = true;
+        if (param_switch_level != SWITCH_LEVEL::TOPO) {
+          is_transfer_param_hot_switch = true;
+        }
       }
       // 按buckets的顺序进行switch
       else {

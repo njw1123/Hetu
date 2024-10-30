@@ -76,6 +76,10 @@ class ExecutableGraph : public Graph {
     return _p2p_single_communicator;
   }
 
+  int32_t shape_mismatch_flag() const {
+    return _shape_mismatch_flag;
+  }
+
   bool is_pipeline_stage_send_op(Operator& op);
 
   bool is_pipeline_stage_recv_op(Operator& op);
@@ -345,10 +349,15 @@ class ExecutableGraph : public Graph {
   // 存放group op的subgraph
   // 以及后面可能会有一些别的后处理
   std::shared_ptr<SubGraph> _terminate_subgraph;
+  // grad reduce算子的input到compute_optimize_bridge_subgraph的映射
+  // 用于overlap grad reduce
+  std::unordered_map<TensorId, std::shared_ptr<SubGraph>> _grad_reduce_subgraph_map;
 
   // env相关
   bool _p2p_single_communicator;
   bool _bridge_single_communicator;
+  bool _overlap_grad_reduce;
+  int32_t _shape_mismatch_flag;
   int32_t _straggler_flag;
   std::string _straggler_log_file_path;
   MEMORY_PROFILE_LEVEL _memory_profile_level;

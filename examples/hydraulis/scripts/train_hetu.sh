@@ -4,7 +4,7 @@ HIDDEN_SIZE=${2:-4096}
 FFN_HIDDEN_SIZE=${3:-11008}
 # FFN_HIDDEN_SIZE=${3:-2560}
 NUM_HEADS=${4:-32}
-GLOBAL_BATCH_SIZE=${5:-64}
+GLOBAL_BATCH_SIZE=${5:-128}
 MAX_SEQ_LEN=${6:-8192}
 SERVER_ADDR=${7:-"172.24.10.109"} # master-0
 # SERVER_ADDR=${7:-"172.24.93.179"} # worker-0
@@ -18,7 +18,7 @@ CASE=0
 if [[ ${CASE} -eq 0 ]]; then
 	# test
 	NUM_GPUS=16
-	MULTI_TP_PP_LIST="[[(8, 1), (8, 1)], [(4, 2), (1, 8)], ]"
+	MULTI_TP_PP_LIST="[[(4, 2), (4, 2)], [(4, 2), (1, 8)], [(4, 2), (1, 4), (1, 4)]]"
 	BATCHING_METHOD=4
 elif [[ ${CASE} -eq 1 ]]; then
 	# homo + greedy packing with static shape

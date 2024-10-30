@@ -13,7 +13,7 @@ from hetu_llama import LLamaLMHeadModel
 from llama_config import LLaMAConfig
 from data_utils import LLaMAJsonDataset, build_data_loader, get_sorted_batch_and_len, build_fake_batch_and_len, get_input_and_label_buckets
 from parallel_utils import read_ds_parallel_config, parse_multi_ds_parallel_config, convert_strategy, generate_ds_parallel_config
-from strategy import strategy_max_seqlen, dynamic_strategy, batching_strategy, distributed_call
+from strategy import get_strategy_max_seqlen, find_optimal_strategy
 
 local_device = None
 all_devices = None
@@ -62,10 +62,19 @@ def pretrain(args):
     multi_config_file_path = []
     multi_match_id_list = []
     multi_max_seqlen_list = []
+    multi_dp_representive_gpu = []
+    
+    # 默认策略list中第一个放optimizer的同构的strategy
+    os_tp, os_pp = multi_tp_pp_list[0][0]
+    os_dp = args.ngpus // os_tp // os_pp
+    for tp_pp in multi_tp_pp_list[0]:
+        assert tp_pp[0] == os_tp and tp_pp[1] == os_pp, "must ensure the first strategy is a homo optimizer strategy"
+    
     for strategy_id in range(num_strategy):
         # 获取当前异构dp策略下每个tp+pp子策略在pool中的id以及其支持的最大seq长度
         match_id_list = []
         max_seqlen_list = []
+        dp_representive_gpu = {}
         for tp_pp in multi_tp_pp_list[strategy_id]:
             tp = tp_pp[0]
             pp = tp_pp[1]
@@ -76,11 +85,12 @@ def pretrain(args):
                     break
             assert match_id != None, f"can't find tp{tp}pp{pp} in the strategy pool, please use the strategy within the pool"
             match_id_list.append(match_id)
-            max_seqlen = strategy_max_seqlen(strategy_pool, match_id, multi_dp_size[strategy_id])
+            max_seqlen = get_strategy_max_seqlen(strategy_pool, match_id, os_dp_tp_pp=(os_dp, os_tp, os_pp))
             aligned_max_seqlen = max_seqlen // alignment * alignment
             max_seqlen_list.append(aligned_max_seqlen)
         multi_match_id_list.append(match_id_list)
         multi_max_seqlen_list.append(max_seqlen_list)
+        print(f"Strategy {strategy_id}, match strategy id list: {match_id_list} and max seqlen list: {max_seqlen_list}")
         # 获取GPU的位置
         # 原则是不让tp跨机并尽可能贪心地让pp跨机
         layers_tp_groups, gpu_pos = convert_strategy(multi_tp_pp_list[strategy_id], args.ngpus, args.num_hidden_layers)
@@ -89,7 +99,16 @@ def pretrain(args):
         print(f"Strategy {strategy_id}, gpu positions are: {gpu_pos}")
         multi_gpu_pos.append(gpu_pos)
         multi_config_file_path.append(config_file_path)
-    
+        # 找到每个dp中编号最小的gpu_id
+        # 后面需要用这些gpu代表去跑决策算法
+        for cur_gpu_id, cur_pos in gpu_pos.items():
+            if cur_pos.dp_id not in dp_representive_gpu:
+                dp_representive_gpu[cur_pos.dp_id] = cur_gpu_id
+            else:
+                dp_representive_gpu[cur_pos.dp_id] = min(dp_representive_gpu[cur_pos.dp_id], cur_gpu_id)
+        print(f"Strategy {strategy_id}, DP representive gpu:", dp_representive_gpu)
+        multi_dp_representive_gpu.append(dp_representive_gpu)
+        
     ht.global_comm_barrier() 
     ds_parallel_configs = read_ds_parallel_config(",".join(multi_config_file_path), num_strategy)
     config = LLaMAConfig(
@@ -174,11 +193,29 @@ def pretrain(args):
     train_dataset = train_dataset_provider(args)
     print(f'{local_device}: build dataset end...')
     
+    def get_strategy_info(
+        strategy_id
+    ):
+        dp_size = multi_dp_size[strategy_id]
+        tp_pp_list = multi_tp_pp_list[strategy_id]
+        max_seqlen_list = multi_max_seqlen_list[strategy_id]
+        match_id_list = multi_match_id_list[strategy_id]
+        gpu_pos = multi_gpu_pos[strategy_id]
+        dp_representive_gpu = multi_dp_representive_gpu[strategy_id]
+        gpu_id = all_devices.get_index(local_device)
+        
+        assert gpu_id in gpu_pos, f"gpu {gpu_id} is not included in this training"
+        dp_id, stage_id = gpu_pos[gpu_id].dp_id, gpu_pos[gpu_id].stage_id
+        assert dp_id < dp_size, "dp size mismatches"
+        
+        return dp_size, tp_pp_list, max_seqlen_list, dp_id, stage_id
+    
     def hetu_train(
         feed_dict,
         num_micro_batches,
         compute_strategy_id,
-        optimize_strategy_id
+        optimize_strategy_id,
+        run_level=ht.run_level("update")
     ):
         try:
             results = train_op.graph.run(
@@ -188,7 +225,7 @@ def pretrain(args):
                 num_micro_batches=num_micro_batches, 
                 compute_strategy_id=compute_strategy_id,
                 optimize_strategy_id=optimize_strategy_id,
-                run_level = ht.run_level("update")
+                run_level = run_level
             )
         except RuntimeError as e:
             print(e)
@@ -201,7 +238,7 @@ def pretrain(args):
     def run_plan(
         epoch = 0,
         consumed_samples = 0,
-        compute_strategy_id = 0,
+        compute_strategy_id_list = [0,],
         optimize_strategy_id = 0,
         warm_up = False,
         batching_method = 4, 
@@ -214,42 +251,17 @@ def pretrain(args):
         # 2 means greedy packing with static shape
         # 3 means greedy packing with dynamic shape
         # 4 means hydraulis packing
-        assert strategy_id < num_strategy, "strategy out of range"
+        if batching_method <= 1:
+            assert len(compute_strategy_id_list) == 1, "batching method <= 1 only support single strategy"
+        assert max(compute_strategy_id_list) < num_strategy, "compute strategy out of range"
         if max_padded_seqlen:
             max_padded_seqlen % alignment == 0, "max_padded_seqlen should be aligned"
-        dp_size = multi_dp_size[strategy_id]
-        tp_pp_list = multi_tp_pp_list[strategy_id]
-        max_seqlen_list = multi_max_seqlen_list[strategy_id]
-        match_id_list = multi_match_id_list[strategy_id]
-        gpu_pos = multi_gpu_pos[strategy_id]
-        gpu_id = all_devices.get_index(local_device)
-        dp_id, stage_id = None, None
-        if gpu_id in gpu_pos:
-            dp_id, stage_id = gpu_pos[gpu_id].dp_id, gpu_pos[gpu_id].stage_id
-            assert dp_id < dp_size, "dp size mismatches"
-        print(f"{local_device}: gpu_id = {gpu_id}, dp_id = {dp_id}, stage_id = {stage_id}")
-        
-        # 找到每个dp中编号最小的gpu_id
-        # 后面需要用这些gpu代表去跑决策算法
-        dp_representive_gpu = {}
-        for cur_gpu_id, cur_pos in gpu_pos.items():
-            if cur_pos.dp_id not in dp_representive_gpu:
-                dp_representive_gpu[cur_pos.dp_id] = cur_gpu_id
-            else:
-                dp_representive_gpu[cur_pos.dp_id] = min(dp_representive_gpu[cur_pos.dp_id], cur_gpu_id)
-        print("DP representive gpu:", dp_representive_gpu)
-
-        # build dataloader and get sequence parallel degree
-        train_iter = None
-        # sequence_parallel_degree = None
-        if dp_id != None:
-            train_iter = train_data_iterator(train_dataset, consumed_samples, args.global_batch_size)
-            # sequence_parallel_degree = tp_pp_list[dp_id][0] # sp = tp 
             
         if warm_up:
-            print(f"{local_device}: warm up begin...")
-            num_micro_batches = 8
-            if dp_id != None:
+            for compute_strategy_id in compute_strategy_id_list:
+                print(f"{local_device}: warm up for compute strategy {compute_strategy_id} begin...")
+                dp_size, tp_pp_list, max_seqlen_list, dp_id, stage_id = get_strategy_info(compute_strategy_id)
+                num_micro_batches = 8
                 # packing
                 if batching_method == 4:
                     max_seqlen = max_seqlen_list[dp_id]
@@ -271,67 +283,72 @@ def pretrain(args):
                     feed_dict[config.cu_seqlens_list[i]] = packed_cu_seqlens_list
                 hetu_train(feed_dict, num_micro_batches, compute_strategy_id, optimize_strategy_id)
                 print(f"{local_device}: warm up end")
-                return
-            else:
-                raise NotImplementedError("currently not support GPUs with no data")
+            return
+        
+        # build dataloader and get sequence parallel degree
+        train_iter = train_data_iterator(train_dataset, consumed_samples, args.global_batch_size)
+        
+        # 默认用compute_strategy_id_list中的第一项
+        optimal_compute_strategy_id = compute_strategy_id_list[0]
+        dp_size, tp_pp_list, max_seqlen_list, dp_id, stage_id = get_strategy_info(compute_strategy_id_list[0])
             
         for step in range(args.steps):
             # load data for each dp
             input_batch, label_batch, cu_seqlens_list = None, None, None
-            if dp_id != None:
-                if len(fake_seqlens) > 0:
-                    sorted_batch, sorted_len = build_fake_batch_and_len(fake_seqlens, train_dataset.pad_id())
-                else:
-                    global_batch = next(train_iter).numpy()
-                    sorted_batch, sorted_len = get_sorted_batch_and_len(global_batch, train_dataset.pad_id())
-                # packing
-                if batching_method > 0:
-                    # unbalanced seqs assignment
-                    if batching_method == 1:
-                        assert args.global_batch_size % dp_size == 0, "global_batch_size should be divided by dp_size when padding"
-                        batch_size_per_dp = args.global_batch_size // dp_size
-                        batch_indices = list(range(batch_size_per_dp * dp_id, batch_size_per_dp * (dp_id + 1)))
-                        batching_option_matrix = None
-                    # balanced seqs assignment
-                    if batching_method >= 2:
-                        # batch_indices = dynamic_strategy(strategy_pool, match_id_list, max_seqlen_list, dp_id, sorted_len)
-                        estimated_cost_1, batch_indices = distributed_call((gpu_id, dp_id, dp_representive_gpu), dynamic_strategy, strategy_pool, match_id_list, max_seqlen_list, dp_id, sorted_len)
-                        # hydraulis packing: balanced packing with utilization guranteed
-                        if batching_method == 4:
-                            # batching_option_matrix = batching_strategy(strategy_pool, match_id_list[dp_id], sorted_len[batch_indices], max_seqlen_list[dp_id])
-                            estimated_cost_2, batching_option_matrix = distributed_call((gpu_id, dp_id, dp_representive_gpu), batching_strategy, strategy_pool, match_id_list[dp_id], sorted_len[batch_indices], max_seqlen_list[dp_id]) 
-                        # greedy packing
-                        else:
-                            estimated_cost_2, batching_option_matrix = None, None
-                    # Question: 每个micro batch的实际的max_seqlen都不一样
-                    # FlashAttn的这一属性的设置是否对性能有明显的影响有待探究
-                    # 目前暂时将其设置成当前轮次所处理的最大的seqlen
-                    config.max_seqlen_symbol.set_data(sorted_len[batch_indices[-1]] - 1) 
-                    print(f"{local_device}: {dp_id}-th dp local batch indices is {batch_indices}, estimated cost is {estimated_cost_1}")
-                    strategy_max_seqlen = max_seqlen_list[dp_id] 
-                    static_shape = False
-                    if batching_method == 2 or batching_method == 3:
-                        assert max_padded_seqlen, "static-shape packing should provide the max seqlen after packing"
-                        strategy_max_seqlen = max_padded_seqlen
-                        static_shape = True
-                    input_bucket, label_bucket = get_input_and_label_buckets(sorted_batch, train_dataset.pad_id(), batch_indices, strategy_max_seqlen, alignment)
-                    input_bucket.pack_data(batching_option_matrix, static_shape)
-                    label_bucket.pack_data(batching_option_matrix, static_shape)
-                    input_batch, label_batch = input_bucket.packed_batch(), label_bucket.packed_batch()
-                    cu_seqlens_list = input_bucket.packed_cu_seqlens_list()
-                    print(f"{local_device}: {dp_id}-th dp seqlens after packed is {[len(seq) for seq in input_batch]}, estimated cost is {estimated_cost_2}")
-                # padding
-                if batching_method == 0:
+            if len(fake_seqlens) > 0:
+                sorted_batch, sorted_len = build_fake_batch_and_len(fake_seqlens, train_dataset.pad_id())
+            else:
+                global_batch = next(train_iter).numpy()
+                sorted_batch, sorted_len = get_sorted_batch_and_len(global_batch, train_dataset.pad_id())
+            print(f"{local_device}: seqs sorted lens is {sorted_len}")
+            
+            # packing
+            if batching_method > 0:
+                # unbalanced seqs assignment
+                if batching_method == 1:
                     assert args.global_batch_size % dp_size == 0, "global_batch_size should be divided by dp_size when padding"
                     batch_size_per_dp = args.global_batch_size // dp_size
                     batch_indices = list(range(batch_size_per_dp * dp_id, batch_size_per_dp * (dp_id + 1)))
-                    assert max_padded_seqlen, "padding should provide the max seqlen after padding"
-                    config.max_seqlen_symbol.set_data(max_padded_seqlen - 1) 
-                    input_bucket, label_bucket = get_input_and_label_buckets(sorted_batch, train_dataset.pad_id(), batch_indices, max_padded_seqlen, alignment)
-                    input_bucket.pad_data()
-                    label_bucket.pad_data()
-                    input_batch, label_batch = input_bucket.padded_batch(), label_bucket.padded_batch()
-                    cu_seqlens_list = input_bucket.padded_cu_seqlens_list()
+                    batching_option_matrix = None
+                if batching_method >= 2:
+                    optimal_compute_strategy_id, estimated_cost_1, batch_indices, estimated_cost_2, batching_option_matrix = find_optimal_strategy(
+                        compute_strategy_id_list, multi_dp_size, multi_tp_pp_list, multi_max_seqlen_list, 
+                        multi_match_id_list, multi_gpu_pos, multi_dp_representive_gpu, 
+                        all_devices, local_device, batching_method, strategy_pool, sorted_len
+                    )
+                    dp_size, tp_pp_list, max_seqlen_list, dp_id, stage_id = get_strategy_info(optimal_compute_strategy_id)
+                # Question: 每个micro batch的实际的max_seqlen都不一样
+                # FlashAttn的这一属性的设置是否对性能有明显的影响有待探究
+                # 目前暂时将其设置成当前轮次所处理的最大的seqlen
+                config.max_seqlen_symbol.set_data(sorted_len[batch_indices[-1]] - 1) 
+                # print(f"{local_device}: {optimal_compute_strategy_id}-th strategy {dp_id}-th dp local batch indices is {batch_indices}, estimated cost is {estimated_cost_1}")
+                strategy_max_seqlen = max_seqlen_list[dp_id] 
+                static_shape = False
+                if batching_method == 2 or batching_method == 3:
+                    assert max_padded_seqlen, "static-shape packing should provide the max seqlen after packing"
+                    strategy_max_seqlen = max_padded_seqlen
+                    static_shape = True
+                input_bucket, label_bucket = get_input_and_label_buckets(sorted_batch, train_dataset.pad_id(), batch_indices, strategy_max_seqlen, alignment)
+                input_bucket.pack_data(batching_option_matrix, static_shape)
+                label_bucket.pack_data(batching_option_matrix, static_shape)
+                input_batch, label_batch = input_bucket.packed_batch(), label_bucket.packed_batch()
+                cu_seqlens_list = input_bucket.packed_cu_seqlens_list()
+                print(f"{local_device}: {optimal_compute_strategy_id}-th strategy {dp_id}-th dp seqlens after packed is {[len(seq) for seq in input_batch]}, estimated cost is {estimated_cost_2}")
+            
+            # padding
+            if batching_method == 0:
+                assert args.global_batch_size % dp_size == 0, "global_batch_size should be divided by dp_size when padding"
+                batch_size_per_dp = args.global_batch_size // dp_size
+                batch_indices = list(range(batch_size_per_dp * dp_id, batch_size_per_dp * (dp_id + 1)))
+                assert max_padded_seqlen, "padding should provide the max seqlen after padding"
+                config.max_seqlen_symbol.set_data(max_padded_seqlen - 1) 
+                input_bucket, label_bucket = get_input_and_label_buckets(sorted_batch, train_dataset.pad_id(), batch_indices, max_padded_seqlen, alignment)
+                input_bucket.pad_data()
+                label_bucket.pad_data()
+                input_batch, label_batch = input_bucket.padded_batch(), label_bucket.padded_batch()
+                cu_seqlens_list = input_bucket.padded_cu_seqlens_list()
+            
+            # build feed_dict
             if input_batch == None or len(input_batch) < 1: 
                 raise NotImplementedError("currently not support GPUs with no data")
             else:
@@ -344,48 +361,53 @@ def pretrain(args):
                 }
                 for i in range(config.n_layer):
                     feed_dict[config.cu_seqlens_list[i]] = [x.astype(np.int32) for x in cu_seqlens_list]
+            
             start_time = time.time()
             if args.torch_profile != 0 and step == 0:
                 with profile(activities=[ProfilerActivity.CUDA]) as prof:
-                    results = hetu_train(feed_dict, len(input_batch), compute_strategy_id, optimize_strategy_id)
-                prof.export_chrome_trace("trace.json")
+                    results = hetu_train(feed_dict, len(input_batch), optimal_compute_strategy_id, optimize_strategy_id)
+                prof.export_chrome_trace(f"trace/trace_{local_device}.json")
             else:
-                results = hetu_train(feed_dict, len(input_batch), compute_strategy_id, optimize_strategy_id)
+                results = hetu_train(feed_dict, len(input_batch), optimal_compute_strategy_id, optimize_strategy_id)
             end_time = time.time()
+            
             consumed_samples += args.global_batch_size
             # 如果在pipeline的最后一个stage上那么就打印loss
             if stage_id == tp_pp_list[dp_id][1] - 1 and len(results) > 0:
                 loss_out = results[0].numpy(force=True).mean()
                 print(f"{local_device}: [Epoch {epoch}] (step {step}, consumed_samples = {consumed_samples}): loss = {loss_out:.3f}, time = {end_time - start_time:.4f}")
+        
         return consumed_samples
     
     # 运行
     def test(
-        compute_strategy_id=0,
-        optimize_strategy_id=0
+        compute_strategy_id_list=[0,],
+        optimize_strategy_id=0,
+        warm_up=True
     ): 
-        run_plan(
-            warm_up=True, 
-            batching_method=args.batching_method,
-            max_padded_seqlen=args.max_seq_len,
-            compute_strategy_id=compute_strategy_id,
-            optimize_strategy_id=optimize_strategy_id
-        )
+        if warm_up:
+            run_plan(
+                warm_up=True, 
+                batching_method=args.batching_method,
+                max_padded_seqlen=args.max_seq_len,
+                compute_strategy_id_list=compute_strategy_id_list,
+                optimize_strategy_id=optimize_strategy_id
+            )
         for epoch in range(args.epochs):
             consumed_samples = 0 # should be reset when run next epoch
             consumed_samples = run_plan(
                 epoch=epoch, 
                 consumed_samples=consumed_samples,
-                compute_strategy_id=compute_strategy_id,
+                compute_strategy_id_list=compute_strategy_id_list,
                 optimize_strategy_id=optimize_strategy_id,
                 batching_method=args.batching_method,
                 max_padded_seqlen=args.max_seq_len,
                 fake_seqlens=ast.literal_eval(args.fake_seqlens)
             )
     
-    compute_strategy_id = len(args.multi_tp_pp_list) - 1
+    compute_strategy_id_list = list(range(len(args.multi_tp_pp_list)))
     optimize_strategy_id = 0
-    test(compute_strategy_id=compute_strategy_id, optimize_strategy_id=optimize_strategy_id)
+    test(compute_strategy_id_list=compute_strategy_id_list, optimize_strategy_id=optimize_strategy_id, warm_up=True)
 
 if __name__ == '__main__':
     print("Run hetu training")

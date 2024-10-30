@@ -356,17 +356,23 @@ void ExecutableGraph::PostRun(std::vector<RuntimeContext>& runtime_ctx_list, Ten
   for (const auto& [param_id, cur_subgraph] : _compute_optimize_bridge_subgraph_sorted) {
     // 执行该subgraph
     // HT_LOG_INFO << cur_subgraph->global_name() << " run begin";
-    cur_subgraph->run(tensor2data, _preserved_data, runtime_ctx_list[micro_batch_id], micro_batch_id, SubGraphOpType::UPDATE, 
+    cur_subgraph->run(tensor2data, _preserved_data, runtime_ctx_list[micro_batch_id], micro_batch_id, SubGraphOpType::UPDATE, true,
                       [this](Operator& op, Tensor2NDArrayMap& tensor2data, size_t micro_batch_id) { return PostOpHandler(op, tensor2data, micro_batch_id); });
     // HT_LOG_INFO << cur_subgraph->global_name() << " run end";
   }
-  _terminate_subgraph->run(tensor2data, _preserved_data, runtime_ctx_list[micro_batch_id], micro_batch_id, SubGraphOpType::UPDATE,
+  _terminate_subgraph->run(tensor2data, _preserved_data, runtime_ctx_list[micro_batch_id], micro_batch_id, SubGraphOpType::UPDATE, true,
                            [this](Operator& op, Tensor2NDArrayMap& tensor2data, size_t micro_batch_id) { return PostOpHandler(op, tensor2data, micro_batch_id); });
 }
 
 OpHandlerStatus ExecutableGraph::PostOpHandler(Operator& op, Tensor2NDArrayMap& tensor2data, size_t micro_batch_id) {
   // HT_LOG_INFO << "PostOpHandler for " << op << " begin to run";
   OpHandlerStatus status;
+  if (is_grad_reduce_op(op) && _overlap_grad_reduce) {
+    // overlap_grad_reduce情形下把grad reduce op放入到了ComputeFunc中去执行
+    // 因此这里直接跳过即可
+    status.need_skip = true;
+    return status;
+  }
   if (is_group_op(op) && _run_level == RunLevel::GRAD) {
     status.need_skip = true;
     return status;

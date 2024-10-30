@@ -636,7 +636,7 @@ class SwitchExecGraph {
     void SwitchParam(const DistributedStatesUnion& src_ds_union, const DeviceGroupUnion& src_group_union,
                      const DistributedStatesUnion& dst_ds_union, const DeviceGroupUnion& dst_group_union,
                      const Tensor& comm_input, const Tensor& after_param, const SyShape& sy_global_shape,
-                     const StreamIndex comp_stream_idx);
+                     const StreamIndex comp_stream_idx, bool ignore_shape_mismatch = false);
 
     void ProfileRunningDetails();
 
@@ -693,7 +693,7 @@ class ComplexExecComm : public SwitchExecGraph {
       _algorithm_level = SWITCH_ALGORITHM_LEVEL::NEW_GREEDY;
     }
 
-    Tensor Instantiate(StreamIndex comm_stream_idx);
+    Tensor Instantiate(StreamIndex comm_stream_idx, bool ignore_shape_mismatch = false);
 
   protected:
     bool _is_instantiated;

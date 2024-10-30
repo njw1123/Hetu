@@ -200,7 +200,7 @@ class SubGraph {
 
     void run(Tensor2NDArrayMap& tensor2data, const Tensor2NDArrayMap& preserved_data, RuntimeContext& runtime_ctx,
              size_t micro_batch_id = 0, SubGraphOpType subgraph_op_type = SubGraphOpType::FORWARD,
-             const OpHandler& = {});
+             bool use_concat_memory_optimization = true, const OpHandler& = {});
 
     std::vector<std::string> subgraph_info() {
       std::vector<std::string> output = {};
