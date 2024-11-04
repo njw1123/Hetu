@@ -15,6 +15,8 @@ def read_yaml(file_path):
 
 def pssh(args):
     hostnames = []
+    ports = []
+    passwords = []
     if args.hosts is None:
         hostnames = ['localhost'] * args.ngpus
     else:
@@ -24,17 +26,20 @@ def pssh(args):
         for host in host_info['hosts']:
             print(host)
             addr = str(host['addr'])
+            port = int(host['port']) if 'port' in host else 22
+            password = str(host['password']) if 'password' in host else None
             initial_workers = int(host['initial_workers'])
             min_workers = int(host['min_workers'])
             max_workers = int(host['max_workers'])
             for i in range(initial_workers):
                 hostnames.append(addr)
+                ports.append(port)
+                passwords.append(password)
     print("HostNames:", hostnames)
     train_command = args.command
     cwd = os.getcwd()
     cmd = "cd " + cwd 
     cmd += f" && source {args.envs} && " 
-    print(cmd)
     cmd_list = []
     for i, hostname in enumerate(hostnames):
         # 请注意log编号目前并不等于rank编号
@@ -43,11 +48,8 @@ def pssh(args):
         cmd_list.append(cmd + f"export HETU_LOCAL_HOSTNAME={hostname} && " + train_command + f" 2>&1 | tee {args.log_path}" + "/log_" + f"{i}" + ".txt")
     clients = []
     outputs = []
-    for hostname, cmd in zip(hostnames, cmd_list):
-        # A800
-        client = ParallelSSHClient([hostname], user='root', port=36000)
-        # If password is needed, you should ssh like this
-        # client = ParallelSSHClient([hostname], port=args.pssh_port, password=args.pssh_password)
+    for hostname, port, password, cmd in zip(hostnames, ports, passwords, cmd_list):
+        client = ParallelSSHClient([hostname], port=port, password=password)
         output = client.run_command(cmd)
         clients.append(client)
         outputs.append(output)
@@ -67,12 +69,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--command", type=str, default='uname', help="command for pssh"
-    )
-    parser.add_argument(
-        "--pssh_port", type=str, default='60001', help="pssh's port"
-    )
-    parser.add_argument(
-        "--pssh_password", type=str, default='gehao1602', help="pssh's password"
     )
     parser.add_argument(
         "--server_addr", type=str, default='127.0.0.1', help="server's address"

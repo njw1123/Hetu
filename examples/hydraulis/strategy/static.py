@@ -53,7 +53,7 @@ if __name__ == '__main__':
     print(json.dumps(data, indent=4))
     
     # 读取数据集的counter
-    file_path = '../_counter.pkl'
+    file_path = '/home/pkuhetu/lhy/multi_switch/examples/hydraulis/dataset_analysis/commoncrawl_counter.pkl'
     with open(file_path, 'rb') as f:
         counter = pickle.load(f)
     print("Read dataset counter")

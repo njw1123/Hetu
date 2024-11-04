@@ -52,6 +52,7 @@ def pssh(args):
     clients = []
     outputs = []
     for hostname, cmd in zip(hostnames, cmd_list):
+        # tencent A800
         client = ParallelSSHClient([hostname], user='root', port=36000)
         # workaround: 4090 need password
         # client = ParallelSSHClient([hostname], port=60001, password="gehao1602")
@@ -104,12 +105,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--command", type=str, default='uname', help="command for pssh"
-    )
-    parser.add_argument(
-        "--server_addr", type=str, default='127.0.0.1', help="server's address"
-    )
-    parser.add_argument(
-        "--server_port", type=str, default='23457', help="server's port"
     )
     parser.add_argument(
         "--ngpus", type=int, default=8, help="num gpus"

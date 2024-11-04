@@ -1,18 +1,18 @@
-NUM_LAYERS=${1:-32}
-HIDDEN_SIZE=${2:-4096}
-# HIDDEN_SIZE=${2:-256}
-FFN_HIDDEN_SIZE=${3:-11008}
-# FFN_HIDDEN_SIZE=${3:-2560}
-NUM_HEADS=${4:-32}
+MODEL_SIZE=${1:-"32b"}
 GLOBAL_BATCH_SIZE=-1 # 目前改用gtb代替gbs
-GLOBAL_TOKEN_NUM=${5:-100000}
-MAX_SEQ_LEN=${6:-8192}
-SERVER_ADDR=${7:-"172.24.10.109"} # master-0
-# SERVER_ADDR=${7:-"172.24.93.179"} # worker-0
-# SERVER_ADDR=${7:-"127.0.0.1"} # 216
-SERVER_PORT=${8:-"23333"}
-HOST_FILE_PATH=${9:-"./scripts/host.yaml"}
-ENV_FILE_PATH=${10:-"./scripts/env_A100.sh"}
+GLOBAL_TOKEN_NUM=${2:-100000}
+MAX_SEQ_LEN=${3:-8192}
+SERVER_ADDR=${4:-"30.207.99.90"} # A800-0
+# SERVER_ADDR=${4:-"30.207.96.91"} # A800-1
+# SERVER_ADDR=${4:-"30.207.98.74"} # A800-2
+# SERVER_ADDR=${4:-"30.207.98.114"} # A800-3
+# SERVER_ADDR=${4:-"30.207.96.39"} # A800-4
+# SERVER_ADDR=${4:-"30.207.98.70"} # A800-5
+# SERVER_ADDR=${4:-"30.207.98.231"} # A800-6
+# SERVER_ADDR=${4:-"30.207.98.69"} # A800-7
+SERVER_PORT=${5:-"23333"}
+HOST_FILE_PATH=${6:-"/jizhicfs/hymiezhao/hostfiles/host01.yaml"}
+ENV_FILE_PATH=${7:-"./scripts/env_A800.sh"}
 
 TORCH_PROFILE=0
 CASE=0
@@ -53,15 +53,31 @@ fi
 
 echo num_gpus=${NUM_GPUS}, global_token_num = ${GLOBAL_TOKEN_NUM}, max_seq_len = ${MAX_SEQ_LEN}
 
-if [[ ${NUM_LAYERS} -eq 32 && ${HIDDEN_SIZE} -eq 4096 && ${NUM_HEADS} -eq 32 ]]; then
-	MODEL_SIZE=7b
-	echo use llama 7b model...
-elif [[ ${NUM_LAYERS} -eq 40 && ${HIDDEN_SIZE} -eq 5120 && ${NUM_HEADS} -eq 40 ]]; then
-	MODEL_SIZE=13b
-	echo use llama 13b model...
+if [ "${MODEL_SIZE}" = "7b" ]; then
+    NUM_LAYERS=32
+    HIDDEN_SIZE=4096
+    FFN_HIDDEN_SIZE=11008
+    NUM_HEADS=32
+elif [ "${MODEL_SIZE}" = "13b" ]; then
+    NUM_LAYERS=40
+    HIDDEN_SIZE=5120
+    FFN_HIDDEN_SIZE=13824
+    NUM_HEADS=40
+elif [ "${MODEL_SIZE}" = "32b" ]; then
+    NUM_LAYERS=60
+    HIDDEN_SIZE=6656 #6672
+    # HIDDEN_SIZE=512
+    # FFN_HIDDEN_SIZE=2752
+    FFN_HIDDEN_SIZE=17920
+    NUM_HEADS=64
+elif [ "${MODEL_SIZE}" = "70b" ]; then
+    NUM_LAYERS=80
+    HIDDEN_SIZE=8192 #6672
+    FFN_HIDDEN_SIZE=28672
+    NUM_HEADS=64
 else
-	MODEL_SIZE=-unknown-size
-	echo use llama unknown-size model...
+    echo the model should be 7b/13b/32b/70b for test.
+    exit 0
 fi
 
 # 请注意log编号目前并不等于rank编号
@@ -69,8 +85,8 @@ LOG_FOLDER=logs/case${CASE}/llama${MODEL_SIZE}_gpus${NUM_GPUS}_gtn${GLOBAL_TOKEN
 mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 
-ROOT_FOLDER=data
-JSON_FILE=${ROOT_FOLDER}/web/combined_data.json
+ROOT_FOLDER=/jizhicfs/hymiezhao/lhy/data
+JSON_FILE=${ROOT_FOLDER}/web/refinedweb0.json
 JSON_KEY=content
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json
 MERGE_FILE=${ROOT_FOLDER}/merges.txt
@@ -87,7 +103,7 @@ CMD="python3 -u train_hetu.py \
 --json_key $JSON_KEY \
 --vocab_file $VOCAB_FILE \
 --merge_file $MERGE_FILE \
---vocab_size 30592 \
+--vocab_size 50304 \
 --hidden_size $HIDDEN_SIZE \
 --ffn_hidden_size $FFN_HIDDEN_SIZE \
 --num_hidden_layers $NUM_LAYERS \

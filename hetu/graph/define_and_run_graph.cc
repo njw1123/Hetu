@@ -1327,6 +1327,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
   }
 
   bool is_transfer_param_hot_switch = false;
+  bool is_empty_cache = true;
   // 需要切换exec graph
   if (save_checkpoint) {
     // 存储param时不需要热切换
@@ -1336,6 +1337,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
     HT_LOG_DEBUG << local_device << ": [Graph Plan] Context switch to the new exec plan begin...";
     // 热切换
     if (_is_active) {
+      is_empty_cache = false;
       auto key = std::make_pair(_active_exec_plan, next_active_exec_plan);
       if (_param_switcher_pool.find(key) == _param_switcher_pool.end()) {
         _param_and_opt_var_bucket_switcher_pool[key] = std::unordered_map<DataType, std::vector<std::shared_ptr<SwitchExecGraph>>>();
@@ -1366,6 +1368,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
       if (_run_level == RunLevel::TOPO) {
         HT_ASSERT(old_exec_graph->_run_level == RunLevel::TOPO) 
           << "graph with RunLevel::TOPO should only follow behind graph with RunLevel::TOPO right now";
+        is_empty_cache = true;
       }
       if (_run_level == RunLevel::ALLOC) {
         HT_ASSERT(old_exec_graph->_run_level == RunLevel::TOPO
@@ -1383,11 +1386,13 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
       if (old_exec_graph->_run_level == RunLevel::TOPO) {
         param_switch_level = SWITCH_LEVEL::TOPO;
         grad_switch_level = SWITCH_LEVEL::TOPO;
+        is_empty_cache = true;
       }
       // 如果旧的exec graph只是alloc
       // 其并没有产生grad
       if (old_exec_graph->_run_level == RunLevel::ALLOC) {
         grad_switch_level = SWITCH_LEVEL::TOPO;
+        is_empty_cache = true;
       }
       // 如果旧的exec graph是update
       // grad已经被消耗掉了
@@ -1462,6 +1467,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
         hetu::impl::ProfileAfterEmptyAllCUDACache(local_device);
         // hetu::impl::comm::EmptyNCCLCache(); // TODO: this may cause "NCCL call ncclCommInitRank(&_comm, _size, _unique_id, _rank) failed: unhandled system error"
         // GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " after empty cache");
+        is_empty_cache = true;
       }
       /*
       for (auto& tensor : _exec_graph_plan_pool[next_active_exec_plan].exec_graph->_transfer_param_buffer->tensor_list()) {
@@ -1563,9 +1569,13 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
   }
 
   // 实际运行（可能发生在热切换后）
-  // 验证mempool是否能释放干净
   // GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " before empty cache");
-  // hetu::impl::ProfileAfterEmptyAllCUDACache(local_device);
+  // hetu::impl::ProfileAfterEmptyAllCUDACache(local_device); // 验证mempool是否能释放干净
+  // workaround: hydraulis need to empty the cuda cache in every run
+  const char* pre_allocate_str = std::getenv("HETU_PRE_ALLOCATE_SIZE_MB");
+  if (pre_allocate_str != NULL && !is_empty_cache) {
+    hetu::impl::ProfileAfterEmptyAllCUDACache(local_device);
+  }
   HT_LOG_DEBUG << exec_graph->name() << " start running..." ;
   exec_graph->_is_transfer_param_hot_switch = is_transfer_param_hot_switch;
   NDArrayList ret;

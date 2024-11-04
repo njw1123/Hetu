@@ -12,7 +12,7 @@ for TP in "${TP_VALUES[@]}"; do
       continue
     fi
     # 定义 EXP_FILE 的路径
-    EXP_FILE="./experiments/scale/compute_only/tp${TP}_pp${PP}.txt"
+    EXP_FILE="./experiments/scale/try/tp${TP}_pp${PP}.txt"
     # 调用现有脚本
     bash scripts/train_hetu_exp.sh "$TP" "$PP" "$EXP_FILE"
   done

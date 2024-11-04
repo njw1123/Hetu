@@ -33,7 +33,7 @@ class Bucket:
         self._padded_cu_seqlens_list = padded_cu_seqlens_list
 
     # 已经默认batch中的数据按照从短到长排序
-    def pack_data(self, batching_option_matrix, static_shape: bool):
+    def pack_data(self, batching_option_matrix, static_shape: bool, sorted=True):
         packed_batch = []
         packed_cu_seqlens_list = []
         # 负载均衡的packing策略
@@ -86,6 +86,11 @@ class Bucket:
                 packed_batch.append(np.concatenate(packed_seqs))
                 packed_cu_seqlens_list.append(np.array(cu_seqlens, dtype=np.int32))
         assert len(packed_batch) > 0, "currently not support no data after packing"
+        if sorted:
+            non_pad_counts = [np.sum(batch != self._pad_token) for batch in packed_batch]
+            sorted_indices = np.argsort(non_pad_counts)[::-1]  # 从大到小排序
+            packed_batch = [packed_batch[i] for i in sorted_indices]
+            packed_cu_seqlens_list = [packed_cu_seqlens_list[i] for i in sorted_indices]
         self._packed_batch = packed_batch
         self._packed_cu_seqlens_list = packed_cu_seqlens_list
 
