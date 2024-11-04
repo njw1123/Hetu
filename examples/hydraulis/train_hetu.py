@@ -40,8 +40,8 @@ def train_dataset_provider(args):
     )
     return train_dataset
 
-def train_data_iterator(dataset, consumed_samples, global_batch_size):
-    dataloader = build_data_loader(dataset, consumed_samples, global_batch_size)
+def train_data_iterator(dataset, consumed_samples, global_batch_size=None, global_token_num=None):
+    dataloader = build_data_loader(dataset, consumed_samples, global_batch_size=global_batch_size, global_token_num=global_token_num)
     train_data_iter = iter(dataloader)
     return train_data_iter
   
@@ -281,12 +281,17 @@ def pretrain(args):
                 }
                 for i in range(config.n_layer):
                     feed_dict[config.cu_seqlens_list[i]] = packed_cu_seqlens_list
-                hetu_train(feed_dict, num_micro_batches, compute_strategy_id, optimize_strategy_id)
+                hetu_train(feed_dict, num_micro_batches, compute_strategy_id, optimize_strategy_id, run_level=ht.run_level("topo"))
                 print(f"{local_device}: warm up end")
             return
         
         # build dataloader and get sequence parallel degree
-        train_iter = train_data_iterator(train_dataset, consumed_samples, args.global_batch_size)
+        assert (args.global_batch_size == -1 and args.global_token_num != -1) \
+            or (args.global_batch_size != -1 and args.global_token_num == -1), "should only use one of the args: global_batch_size & global_token_num"
+        if args.global_batch_size != -1:
+            train_iter = train_data_iterator(train_dataset, consumed_samples, global_batch_size=args.global_batch_size)
+        if args.global_token_num != -1:
+            train_iter = train_data_iterator(train_dataset, consumed_samples, global_token_num=args.global_token_num)
         
         # 默认用compute_strategy_id_list中的第一项
         optimal_compute_strategy_id = compute_strategy_id_list[0]
@@ -298,15 +303,15 @@ def pretrain(args):
             if len(fake_seqlens) > 0:
                 sorted_batch, sorted_len = build_fake_batch_and_len(fake_seqlens, train_dataset.pad_id())
             else:
-                global_batch = next(train_iter).numpy()
+                global_batch = np.array(next(train_iter))
                 sorted_batch, sorted_len = get_sorted_batch_and_len(global_batch, train_dataset.pad_id())
-            print(f"{local_device}: seqs sorted lens is {sorted_len}")
+            print(f"{local_device}: {len(sorted_batch)} seqs sorted lens is {sorted_len}")
             
             # packing
             if batching_method > 0:
                 # unbalanced seqs assignment
                 if batching_method == 1:
-                    assert args.global_batch_size % dp_size == 0, "global_batch_size should be divided by dp_size when padding"
+                    assert args.global_batch_size != -1 and args.global_batch_size % dp_size == 0, "global_batch_size should be divided by dp_size"
                     batch_size_per_dp = args.global_batch_size // dp_size
                     batch_indices = list(range(batch_size_per_dp * dp_id, batch_size_per_dp * (dp_id + 1)))
                     batching_option_matrix = None
@@ -337,7 +342,7 @@ def pretrain(args):
             
             # padding
             if batching_method == 0:
-                assert args.global_batch_size % dp_size == 0, "global_batch_size should be divided by dp_size when padding"
+                assert args.global_batch_size != -1 and args.global_batch_size % dp_size == 0, "global_batch_size should be divided by dp_size"
                 batch_size_per_dp = args.global_batch_size // dp_size
                 batch_indices = list(range(batch_size_per_dp * dp_id, batch_size_per_dp * (dp_id + 1)))
                 assert max_padded_seqlen, "padding should provide the max seqlen after padding"
@@ -371,7 +376,7 @@ def pretrain(args):
                 results = hetu_train(feed_dict, len(input_batch), optimal_compute_strategy_id, optimize_strategy_id)
             end_time = time.time()
             
-            consumed_samples += args.global_batch_size
+            consumed_samples += len(sorted_batch)
             # 如果在pipeline的最后一个stage上那么就打印loss
             if stage_id == tp_pp_list[dp_id][1] - 1 and len(results) > 0:
                 loss_out = results[0].numpy(force=True).mean()
@@ -407,7 +412,7 @@ def pretrain(args):
     
     compute_strategy_id_list = list(range(len(args.multi_tp_pp_list)))
     optimize_strategy_id = 0
-    test(compute_strategy_id_list=compute_strategy_id_list, optimize_strategy_id=optimize_strategy_id, warm_up=True)
+    test(compute_strategy_id_list=compute_strategy_id_list, optimize_strategy_id=optimize_strategy_id, warm_up=False)
 
 if __name__ == '__main__':
     print("Run hetu training")
@@ -428,7 +433,10 @@ if __name__ == '__main__':
         "--multi_tp_pp_list", type=str, default="[]", help="multi hetero dp strategy list"
     )
     parser.add_argument(
-        "--global_batch_size", type=int, default=64, help="global training batch size"
+        "--global_batch_size", type=int, default=-1, help="global training batch size"
+    )
+    parser.add_argument(
+        "--global_token_num", type=int, default=-1, help="global training token num"
     )
     parser.add_argument(
         "--max_seq_len", type=int, default=4096, help="maximum sequence length in the whole dataset"

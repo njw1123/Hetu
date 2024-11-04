@@ -9,8 +9,8 @@ NUM_HEADS=32
 MICRO_BATCH_SIZE=1
 GLOBAL_BATCH_SIZE=16
 FFN_HIDDEN_SIZE=11008
-# SERVER_ADDR="172.24.10.109"
-SERVER_ADDR="172.24.93.179" # worker-0
+SERVER_ADDR="172.24.10.109"
+# SERVER_ADDR="172.24.93.179" # worker-0
 # SERVER_ADDR="127.0.0.1" # 216
 SERVER_PORT="23462"
 HOST_FILE_PATH="./scripts/host.yaml"
@@ -124,7 +124,7 @@ CMD="python3 -u train_hetu_exp.py \
 
 source ${ENV_FILE_PATH}
 if [ ${NUM_GPUS} -gt 8 ]; then
-python3 ../../../python_refactor/hetu/rpc/pssh_start.py \
+python3 ../../../python_refactor/hetu/rpc/pssh_start_exp.py \
 	--hosts ${HOST_FILE_PATH} \
 	--command "$CMD" \
 	--server_port ${SERVER_PORT} \
@@ -132,7 +132,7 @@ python3 ../../../python_refactor/hetu/rpc/pssh_start.py \
 	--envs ${ENV_FILE_PATH} \
 	--log_path ${LOG_FOLDER}
 else
-python3 ../../../python_refactor/hetu/rpc/pssh_start.py \
+python3 ../../../python_refactor/hetu/rpc/pssh_start_exp.py \
 	--command "$CMD" \
 	--server_port ${SERVER_PORT} \
 	--ngpus ${NUM_GPUS} \

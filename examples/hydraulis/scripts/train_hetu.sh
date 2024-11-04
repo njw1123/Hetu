@@ -4,7 +4,8 @@ HIDDEN_SIZE=${2:-4096}
 FFN_HIDDEN_SIZE=${3:-11008}
 # FFN_HIDDEN_SIZE=${3:-2560}
 NUM_HEADS=${4:-32}
-GLOBAL_BATCH_SIZE=${5:-128}
+GLOBAL_BATCH_SIZE=-1 # 目前改用gtb代替gbs
+GLOBAL_TOKEN_NUM=${5:-100000}
 MAX_SEQ_LEN=${6:-8192}
 SERVER_ADDR=${7:-"172.24.10.109"} # master-0
 # SERVER_ADDR=${7:-"172.24.93.179"} # worker-0
@@ -50,7 +51,7 @@ else
 	exit 1
 fi
 
-echo num_gpus=${NUM_GPUS}, global_batch_size = ${GLOBAL_BATCH_SIZE}, max_seq_len = ${MAX_SEQ_LEN}
+echo num_gpus=${NUM_GPUS}, global_token_num = ${GLOBAL_TOKEN_NUM}, max_seq_len = ${MAX_SEQ_LEN}
 
 if [[ ${NUM_LAYERS} -eq 32 && ${HIDDEN_SIZE} -eq 4096 && ${NUM_HEADS} -eq 32 ]]; then
 	MODEL_SIZE=7b
@@ -64,12 +65,12 @@ else
 fi
 
 # 请注意log编号目前并不等于rank编号
-LOG_FOLDER=logs/case${CASE}/llama${MODEL_SIZE}_gpus${NUM_GPUS}_gbs${GLOBAL_BATCH_SIZE}_msl${MAX_SEQ_LEN}
+LOG_FOLDER=logs/case${CASE}/llama${MODEL_SIZE}_gpus${NUM_GPUS}_gtn${GLOBAL_TOKEN_NUM}_msl${MAX_SEQ_LEN}
 mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 
 ROOT_FOLDER=data
-JSON_FILE=${ROOT_FOLDER}/web/refinedweb0.json
+JSON_FILE=${ROOT_FOLDER}/web/combined_data.json
 JSON_KEY=content
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json
 MERGE_FILE=${ROOT_FOLDER}/merges.txt
@@ -80,6 +81,7 @@ CMD="python3 -u train_hetu.py \
 --batching_method $BATCHING_METHOD \
 --multi_tp_pp_list \"${MULTI_TP_PP_LIST}\" \
 --global_batch_size $GLOBAL_BATCH_SIZE \
+--global_token_num $GLOBAL_TOKEN_NUM \
 --max_seq_len $MAX_SEQ_LEN \
 --json_file $JSON_FILE \
 --json_key $JSON_KEY \

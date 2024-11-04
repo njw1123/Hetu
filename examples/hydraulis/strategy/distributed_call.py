@@ -1,4 +1,5 @@
 import os
+import resource
 import pickle
 import time
 import fcntl
@@ -8,23 +9,27 @@ import hetu as ht
 from typing import Callable, Any, Tuple, Dict
 from .dynamic_pulp import dynamic_strategy, batching_strategy
 
+def increase_file_descriptor_limit():
+    soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    # print(f"Current soft limit: {soft_limit}, hard limit: {hard_limit}")
+    # 增加软限制，但不能超过硬限制
+    new_soft_limit = min(65536, hard_limit) 
+    resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft_limit, hard_limit))
+    # print(f"New soft limit: {new_soft_limit}")
+
+# 在主程序开始时调用
+increase_file_descriptor_limit()
 func_call_folder = "./func_call"
-write_tag = {}
-read_tag = {}
+tag = 0
 
 # workaround
 # hope to leverage grpc in the future
-def distributed_call(need_max_cost: bool, distributed_status: Tuple[int, int, int, int, Dict[int, int]], func: Callable, *args: Any, **kwargs: Any):
+def distributed_call(func_call_folder, tag, need_max_cost: bool, distributed_status: Tuple[int, int, int, int, Dict[int, int]], func: Callable, *args: Any, **kwargs: Any):
     # synchronize all processes
     # but seems doesn't work
     # ht.global_comm_barrier() 
-    global write_tag, read_tag
     start_time = time.time()
     strategy_id, gpu_id, dp_id, dp_size, dp_representive_gpu = distributed_status
-    if strategy_id not in write_tag:
-        write_tag[strategy_id] = 0
-    if strategy_id not in read_tag:
-        read_tag[strategy_id] = 0
     path = func_call_folder + f"/{func.__name__}_strategy{strategy_id}_dp{dp_id}.pkl"
     if not os.path.exists(func_call_folder):
         os.makedirs(func_call_folder)
@@ -35,13 +40,12 @@ def distributed_call(need_max_cost: bool, distributed_status: Tuple[int, int, in
         with open(path, 'wb') as file:
             fcntl.flock(file, fcntl.LOCK_EX)
             try:
-                pickle.dump((result, write_tag[strategy_id]), file)
+                pickle.dump((result, tag), file)
                 file.flush()
                 os.fsync(file.fileno())
             finally:
                 fcntl.flock(file, fcntl.LOCK_UN)
         # print(f"call func {func.__name__} end...")
-    write_tag[strategy_id] += 1
     # ht.global_comm_barrier() 
     all_dp_results = []
     dp_range = range(dp_size) if need_max_cost else [dp_id,]
@@ -52,20 +56,19 @@ def distributed_call(need_max_cost: bool, distributed_status: Tuple[int, int, in
                 with open(path, 'rb') as file:
                     try:
                         fcntl.flock(file, fcntl.LOCK_SH)
-                        result, tag = pickle.load(file)
+                        result, read_tag = pickle.load(file)
                     finally:
                         fcntl.flock(file, fcntl.LOCK_UN)
             except Exception as e:
                 # print("Exception raise")
                 time.sleep(1)  # 等待文件写入完成
                 continue
-            if tag == read_tag[strategy_id]:
+            if read_tag == tag:
                 break
             else:
-                # print(f"read tag = {read_tag[strategy_id]} but file tag = {tag}")
+                # print(f"read tag = {read_tag} but cur func call tag = {tag}")
                 time.sleep(1)  # 等待文件写入完成
         all_dp_results.append(result)
-    read_tag[strategy_id] += 1
     # ht.global_comm_barrier() 
     end_time = time.time()
     if need_max_cost:
@@ -83,6 +86,7 @@ def process_strategy(args):
     batching_option_matrix = None
     
     (
+        func_call_folder, tag,
         compute_strategy_id, multi_dp_size, multi_tp_pp_list, multi_max_seqlen_list, 
         multi_match_id_list, multi_gpu_pos, multi_dp_representive_gpu,
         all_devices, local_device, batching_method, 
@@ -103,6 +107,7 @@ def process_strategy(args):
     
     # Call dynamic strategy (distributed)
     estimated_cost_1, batch_indices = distributed_call(
+        func_call_folder, tag,
         True, (compute_strategy_id, gpu_id, dp_id, dp_size, dp_representive_gpu), 
         dynamic_strategy, strategy_pool, match_id_list, max_seqlen_list, dp_id, sorted_len
     )
@@ -111,6 +116,7 @@ def process_strategy(args):
     if batching_method == 4:
         # Call batching strategy (distributed)
         estimated_cost_2, batching_option_matrix = distributed_call(
+            func_call_folder, tag,
             True, (compute_strategy_id, gpu_id, dp_id, dp_size, dp_representive_gpu), 
             batching_strategy, strategy_pool, match_id_list[dp_id], 
             sorted_len[batch_indices], max_seqlen_list[dp_id]
@@ -129,12 +135,15 @@ def find_optimal_strategy(
     all_devices, local_device, batching_method, 
     strategy_pool, sorted_len
 ):
+    global func_call_folder, tag
+    
     # 先筛选出可以跑当前max_seqlen的strategy
     compute_strategy_id_list = [id for id in compute_strategy_id_list if max(multi_max_seqlen_list[id]) >= sorted_len[-1]]
 
     # Prepare arguments for multiprocessing
     args_list = [
         (
+            func_call_folder, tag,
             compute_strategy_id, multi_dp_size, multi_tp_pp_list, multi_max_seqlen_list, 
             multi_match_id_list, multi_gpu_pos, multi_dp_representive_gpu,
             all_devices, local_device, batching_method, 
@@ -144,13 +153,11 @@ def find_optimal_strategy(
     ]
 
     # print(f"Simutaneously handle strategies {compute_strategy_id_list}")
-    # Determine the number of threads to use
-    num_threads = min(len(args_list), 32) 
-    # Use ThreadPoolExecutor to parallelize the strategy processing
     
     start_time = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=min(len(args_list), 32)) as executor:
         results = list(executor.map(process_strategy, args_list))
+    tag += 1
     end_time = time.time()
     print(f"Find optimal seqs-assigning & seqs-batching strategy time cost: {end_time - start_time}s")
     
