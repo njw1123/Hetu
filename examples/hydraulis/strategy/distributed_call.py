@@ -31,8 +31,9 @@ def distributed_call(func_call_folder, tag, need_max_cost: bool, distributed_sta
     start_time = time.time()
     strategy_id, gpu_id, dp_id, dp_size, dp_representive_gpu = distributed_status
     path = func_call_folder + f"/{func.__name__}_strategy{strategy_id}_dp{dp_id}.pkl"
-    if not os.path.exists(func_call_folder):
-        os.makedirs(func_call_folder)
+    assert os.path.exists(func_call_folder), f"please ensure {func_call_folder} is created"
+        # os.makedirs(func_call_folder)        
+    # print(f"strategy {strategy_id}, dp {dp_id}, gpu {gpu_id}, call func {func.__name__} begin...")
     if gpu_id == dp_representive_gpu[dp_id]:
         # representive rank process call the function and write the result to the file
         # print(f"call func {func.__name__} begin...")
@@ -46,9 +47,11 @@ def distributed_call(func_call_folder, tag, need_max_cost: bool, distributed_sta
             finally:
                 fcntl.flock(file, fcntl.LOCK_UN)
         # print(f"call func {func.__name__} end...")
+    # print(f"strategy {strategy_id}, dp {dp_id}, gpu {gpu_id}, call func {func.__name__} end...")
     # ht.global_comm_barrier() 
     all_dp_results = []
-    dp_range = range(dp_size) if need_max_cost else [dp_id,]
+    dp_range = list(range(dp_size)) if need_max_cost else [dp_id,]
+    # print(f"strategy {strategy_id}, dp {dp_id}, gpu {gpu_id}, get dp range {dp_range} results of {func.__name__} begin...")
     for cur_id in dp_range:
         path = func_call_folder + f"/{func.__name__}_strategy{strategy_id}_dp{cur_id}.pkl"
         while True:
@@ -69,6 +72,7 @@ def distributed_call(func_call_folder, tag, need_max_cost: bool, distributed_sta
                 # print(f"read tag = {read_tag} but cur func call tag = {tag}")
                 time.sleep(1)  # 等待文件写入完成
         all_dp_results.append(result)
+    # print(f"strategy {strategy_id}, dp {dp_id}, gpu {gpu_id}, get dp range {dp_range} results of {func.__name__} end...")
     # ht.global_comm_barrier() 
     end_time = time.time()
     if need_max_cost:

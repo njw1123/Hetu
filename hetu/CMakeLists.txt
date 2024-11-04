@@ -16,6 +16,8 @@ list(FILTER HETU_SRC EXCLUDE REGEX "${HETU_SRC_DIR}/hetu/test/*")
 add_library(hetu_C SHARED ${HETU_SRC})
 
 # Set CMake prefix path
+# A800
+# set(CMAKE_PREFIX_PATH /jizhicfs/hymiezhao/lhy/env)
 # A100
 set(CMAKE_PREFIX_PATH /home/pkuhetu/Hetu-dev/fused_kernel/.local)
 # 4090
