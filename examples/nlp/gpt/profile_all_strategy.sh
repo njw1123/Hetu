@@ -5,7 +5,7 @@ PP_VALUES=(1 2 4 8)
 for TP in "${TP_VALUES[@]}"; do
   for PP in "${PP_VALUES[@]}"; do
     # 跳过 TP * PP 大于 16 的情况
-    if (( TP * PP > 8 )); then
+    if (( TP * PP > 16 )); then
       continue
     fi
     if (( TP * PP < 1 )); then

@@ -6,12 +6,17 @@ FFN_HIDDEN_SIZE=${3:-11008}
 NUM_HEADS=${4:-32}
 GLOBAL_BATCH_SIZE=${5:-128}
 MAX_SEQ_LEN=${6:-8192}
-SERVER_ADDR=${7:-"172.24.10.109"} # master-0
-# SERVER_ADDR=${7:-"172.24.93.179"} # worker-0
-# SERVER_ADDR=${7:-"127.0.0.1"} # 216
+SERVER_ADDR=${7:-"30.207.99.90"} # A800-0
+# SERVER_ADDR=${7:-"30.207.96.91"} # A800-1
+# SERVER_ADDR=${7:-"30.207.98.74"} # A800-2
+# SERVER_ADDR=${7:-"30.207.98.114"} # A800-3
+# SERVER_ADDR=${7:-"30.207.96.39"} # A800-4
+# SERVER_ADDR=${7:-"30.207.98.70"} # A800-5
+# SERVER_ADDR=${7:-"30.207.98.231"} # A800-6
+# SERVER_ADDR=${7:-"30.207.98.69"} # A800-7
 SERVER_PORT=${8:-"23333"}
-HOST_FILE_PATH=${9:-"./scripts/host.yaml"}
-ENV_FILE_PATH=${10:-"./scripts/env_A100.sh"}
+HOST_FILE_PATH=${9:-"/jizhicfs/hymiezhao/hostfiles/host01.yaml"}
+ENV_FILE_PATH=${10:-"./scripts/env_A800.sh"}
 
 TORCH_PROFILE=0
 CASE=0
@@ -68,7 +73,7 @@ LOG_FOLDER=logs/case${CASE}/llama${MODEL_SIZE}_gpus${NUM_GPUS}_gbs${GLOBAL_BATCH
 mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 
-ROOT_FOLDER=data
+ROOT_FOLDER=/jizhicfs/hymiezhao/lhy/data
 JSON_FILE=${ROOT_FOLDER}/web/refinedweb0.json
 JSON_KEY=content
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json
@@ -85,7 +90,7 @@ CMD="python3 -u train_hetu.py \
 --json_key $JSON_KEY \
 --vocab_file $VOCAB_FILE \
 --merge_file $MERGE_FILE \
---vocab_size 30592 \
+--vocab_size 50304 \
 --hidden_size $HIDDEN_SIZE \
 --ffn_hidden_size $FFN_HIDDEN_SIZE \
 --num_hidden_layers $NUM_LAYERS \

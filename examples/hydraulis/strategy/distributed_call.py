@@ -26,8 +26,9 @@ def distributed_call(need_max_cost: bool, distributed_status: Tuple[int, int, in
     if strategy_id not in read_tag:
         read_tag[strategy_id] = 0
     path = func_call_folder + f"/{func.__name__}_strategy{strategy_id}_dp{dp_id}.pkl"
-    if not os.path.exists(func_call_folder):
-        os.makedirs(func_call_folder)
+    assert os.path.exists(func_call_folder), f"please ensure {func_call_folder} is created"
+        # os.makedirs(func_call_folder)        
+    # print(f"strategy {strategy_id}, dp {dp_id}, gpu {gpu_id}, call func {func.__name__} begin...")
     if gpu_id == dp_representive_gpu[dp_id]:
         # representive rank process call the function and write the result to the file
         # print(f"call func {func.__name__} begin...")
@@ -41,10 +42,12 @@ def distributed_call(need_max_cost: bool, distributed_status: Tuple[int, int, in
             finally:
                 fcntl.flock(file, fcntl.LOCK_UN)
         # print(f"call func {func.__name__} end...")
+    # print(f"strategy {strategy_id}, dp {dp_id}, gpu {gpu_id}, call func {func.__name__} end...")
     write_tag[strategy_id] += 1
     # ht.global_comm_barrier() 
     all_dp_results = []
-    dp_range = range(dp_size) if need_max_cost else [dp_id,]
+    dp_range = list(range(dp_size)) if need_max_cost else [dp_id,]
+    # print(f"strategy {strategy_id}, dp {dp_id}, gpu {gpu_id}, get dp range {dp_range} results of {func.__name__} begin...")
     for cur_id in dp_range:
         path = func_call_folder + f"/{func.__name__}_strategy{strategy_id}_dp{cur_id}.pkl"
         while True:
@@ -66,6 +69,7 @@ def distributed_call(need_max_cost: bool, distributed_status: Tuple[int, int, in
                 time.sleep(1)  # 等待文件写入完成
         all_dp_results.append(result)
     read_tag[strategy_id] += 1
+    # print(f"strategy {strategy_id}, dp {dp_id}, gpu {gpu_id}, get dp range {dp_range} results of {func.__name__} end...")
     # ht.global_comm_barrier() 
     end_time = time.time()
     if need_max_cost:

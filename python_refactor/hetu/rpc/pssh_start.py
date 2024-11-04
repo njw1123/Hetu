@@ -33,18 +33,19 @@ def pssh(args):
     train_command = args.command
     cwd = os.getcwd()
     cmd = "cd " + cwd 
-    cmd += f" && source {args.envs} && " + train_command 
+    cmd += f" && source {args.envs} && " 
     print(cmd)
     cmd_list = []
-    for i in range(len(hostnames)):
+    for i, hostname in enumerate(hostnames):
         # 请注意log编号目前并不等于rank编号
         # log编号是进程编号
         # 但不能保证分配到同样编号的rank
-        cmd_list.append(cmd + f" 2>&1 | tee {args.log_path}" + "/log_" + f"{i}" + ".txt")
+        cmd_list.append(cmd + f"export HETU_LOCAL_HOSTNAME={hostname} && " + train_command + f" 2>&1 | tee {args.log_path}" + "/log_" + f"{i}" + ".txt")
     clients = []
     outputs = []
     for hostname, cmd in zip(hostnames, cmd_list):
-        client = ParallelSSHClient([hostname])
+        # A800
+        client = ParallelSSHClient([hostname], user='root', port=36000)
         # If password is needed, you should ssh like this
         # client = ParallelSSHClient([hostname], port=args.pssh_port, password=args.pssh_password)
         output = client.run_command(cmd)

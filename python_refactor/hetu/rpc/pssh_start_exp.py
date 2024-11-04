@@ -37,11 +37,10 @@ def pssh(args):
     train_command = args.command
     cwd = os.getcwd()
     cmd = "cd " + cwd 
-    cmd += f" && source {args.envs} && " + train_command 
-    print(cmd)
+    cmd += f" && source {args.envs} && " 
     cmd_list = []
     log_list = []
-    for i in range(len(hostnames)):
+    for i, hostname in enumerate(hostnames):
         # 请注意log编号目前并不等于rank编号
         # log编号是进程编号
         # 但不能保证分配到同样编号的rank
@@ -49,11 +48,11 @@ def pssh(args):
         log = open(log_path, 'w')
         log.close()
         log_list.append(log_path)
-        cmd_list.append(cmd + f" 2>&1 | tee {log_path}")
+        cmd_list.append(cmd + f"export HETU_LOCAL_HOSTNAME={hostname} && " + train_command + f" 2>&1 | tee {log_path}")
     clients = []
     outputs = []
     for hostname, cmd in zip(hostnames, cmd_list):
-        client = ParallelSSHClient([hostname])
+        client = ParallelSSHClient([hostname], user='root', port=36000)
         # workaround: 4090 need password
         # client = ParallelSSHClient([hostname], port=60001, password="gehao1602")
         output = client.run_command(cmd, use_pty=True)

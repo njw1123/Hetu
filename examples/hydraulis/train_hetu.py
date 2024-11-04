@@ -22,8 +22,12 @@ alignment = 128
 
 def distributed_init(args):
     global local_device, all_devices
-    hostname = socket.gethostname()
-    os.environ['HETU_LOCAL_HOSTNAME'] = hostname
+    if 'HETU_LOCAL_HOSTNAME' not in os.environ:
+        # 通过socket获取主机名并设置环境变量
+        hostname = socket.gethostname()
+        os.environ['HETU_LOCAL_HOSTNAME'] = hostname
+    else:
+        print(f"Environment variable 'HETU_LOCAL_HOSTNAME' already set: {os.environ['HETU_LOCAL_HOSTNAME']}")
     ht.init_comm_group(args.ngpus, server_address = args.server_addr + ":" + args.server_port)
     local_device = ht.local_device()
     all_devices = ht.global_device_group()

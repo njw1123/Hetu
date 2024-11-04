@@ -1922,8 +1922,10 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
           << "cannot find the mapping of " << param << " in the transfer map";
         auto& transfer_in_buffer = transfer_it->second;
         if (_shape_mismatch_flag == 0) {
-          HT_ASSERT(transfer_in_buffer->meta() == final_transfer->meta())
-            << "the meta of the transfer before/after substitute comm op should be equal"
+          HT_ASSERT(transfer_in_buffer->shape() == final_transfer->shape()
+                    && transfer_in_buffer->dtype() == final_transfer->dtype()
+                    && transfer_in_buffer->stride() == final_transfer->stride())
+            << "the meta (except device) of the transfer before/after substitute comm op should be equal"
             << ", but meta of transfer in buffer is " << transfer_in_buffer->meta()
             << ", and meta of transfer is " << final_transfer->meta();
         }
@@ -1953,8 +1955,10 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
           << "cannot find the mapping of " << param << " in the grad map";
         auto& grad_in_buffer = grad_it->second;
         if (_shape_mismatch_flag == 0) {
-          HT_ASSERT(grad_in_buffer->meta() == final_grad->meta())
-            << "the meta of the grad before/after substitute comm op should be equal"
+          HT_ASSERT(grad_in_buffer->shape() == final_grad->shape()
+                    && grad_in_buffer->dtype() == final_grad->dtype()
+                    && grad_in_buffer->stride() == final_grad->stride())
+            << "the meta (except device) of the grad before/after substitute comm op should be equal"
             << ", but meta of grad in buffer is " << grad_in_buffer->meta()
             << ", and meta of grad is " << final_grad->meta();
         }
