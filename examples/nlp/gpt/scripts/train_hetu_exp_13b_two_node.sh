@@ -9,12 +9,12 @@ NUM_HEADS=40
 MICRO_BATCH_SIZE=1
 GLOBAL_BATCH_SIZE=16
 FFN_HIDDEN_SIZE=13824
-SERVER_ADDR="30.207.98.74"
+SERVER_ADDR="30.207.99.90"
 # SERVER_ADDR="172.24.10.109"
 # SERVER_ADDR="172.24.93.179" # worker-0
 # SERVER_ADDR="127.0.0.1" # 216
 SERVER_PORT="23462"
-HOST_FILE_PATH="/jizhicfs/hymiezhao/lhy/hostfiles/host23.yaml"
+HOST_FILE_PATH="/jizhicfs/hymiezhao/lhy/hostfiles/host01.yaml"
 ENV_FILE_PATH="./scripts/env_A800.sh"
 
 NUM_GPUS=$(expr $TP \* $PP \* $DP)

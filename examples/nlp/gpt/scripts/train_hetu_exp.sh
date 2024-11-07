@@ -60,15 +60,15 @@ if [ ! -e "$EXP_FILE" ]; then
 	> "$EXP_FILE"
 fi
 
-if (( TP == 2 && PP == 4 )); then
-	START_SEQ=128
+if (( TP == 8 && PP == 1 )); then
+	START_SEQ=24960
 elif (( TP == 8 && PP == 2 )); then
 	START_SEQ=128
 else
 	START_SEQ=128
 fi
 
-for i in $(seq ${START_SEQ} 128 65536); do
+for i in $(seq ${START_SEQ} 128 32768); do
 
 content=$(<"$EXP_FILE")
 length=${#content}
