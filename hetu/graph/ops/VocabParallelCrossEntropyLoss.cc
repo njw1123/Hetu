@@ -51,21 +51,24 @@ void VocabParallelCrossEntropyOpImpl::DoCompute(
   if (op->input(0)->get_local_distributed_states().get_dim(1) == 1) {
     // no tp vocab parallel, just pure dp
     // illegal memory access may occur
-    NDArray::sceloss(preds, labels, ignored_index(), reduction(), op->instantiation_ctx().stream_index, outputs.at(0));    
+    // NDArray::sceloss(preds, labels, ignored_index(), reduction(), op->instantiation_ctx().stream_index, outputs.at(0));    
   } else { 
     // tp vocab parallel loss
     DeviceGroup _comm_group = get_devices_by_dim(op->input(0), 1);
-    auto ranks = hetu::impl::comm::DeviceGroupToWorldRanks(_comm_group);
-    hetu::impl::comm::NCCLCommunicationGroup::GetOrCreate(ranks, op->instantiation_ctx().stream()); // do allreduce 3 times  
+    // workaround: hydraulis e2e exp avoid communicator created on compute stream
+    // auto ranks = hetu::impl::comm::DeviceGroupToWorldRanks(_comm_group);
+    // hetu::impl::comm::NCCLCommunicationGroup::GetOrCreate(ranks, op->instantiation_ctx().stream()); // do allreduce 3 times  
     // HT_LOG_INFO << hetu::impl::comm::GetLocalDevice() << ": VocabParallelCrossEntropyOp: comm_group: " << _comm_group;
     // loss per token = - log(e^x / sum(e^x)) = log(sum(e^x) / e^x)=log(sum(e^x)) - x; where x = x_ori - x_max
     // 1. x = x_ori - x_max
     NDArray reduce_max_partial = NDArray::reduce(preds, kMAX, {-1}, true, op->instantiation_ctx().stream_index); // split1 -> partial, cuda malloc
     NDArray reduce_max = reduce_max_partial;
+    /*
     HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), // partial -> dup, inplace
                                     hetu::impl::AllReduce, reduce_max_partial,
                                     reduce_max, kMAX, _comm_group,
                                     op->instantiation_ctx().stream());
+    */
     NDArray vocab_parallel_logits = preds - reduce_max; // cuda malloc
     NDArray::MarkUsedBy({preds, labels, reduce_max_partial, vocab_parallel_logits}, op->instantiation_ctx().stream());
 
@@ -73,10 +76,12 @@ void VocabParallelCrossEntropyOpImpl::DoCompute(
     NDArray exp_logits = NDArray::exp(vocab_parallel_logits, op->instantiation_ctx().stream_index); // cuda malloc
     NDArray sum_exp_logits_partial = NDArray::reduce(exp_logits, kSUM, {-1}, true, op->instantiation_ctx().stream_index); // split1 -> partial, cuda malloc
     NDArray sum_exp_logits = sum_exp_logits_partial;
+    /*
     HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), // partial -> dup, inplace
                                     hetu::impl::AllReduce, sum_exp_logits_partial,
                                     sum_exp_logits, kSUM, _comm_group,
                                     op->instantiation_ctx().stream());
+    */
     // store softmax for backward compute
     // NDArray softmax = exp_logits / sum_exp_logits;
     NDArray softmax = NDArray::div(exp_logits, sum_exp_logits, op->instantiation_ctx().stream_index, exp_logits); // inplace
@@ -99,10 +104,12 @@ void VocabParallelCrossEntropyOpImpl::DoCompute(
                                 labels, vocab_start_index, vocab_end_index, ignored_index(),
                                 predict_logits_partial, log_sum_exp_logits, op->instantiation_ctx().stream());
     NDArray predict_logits = predict_logits_partial;
+    /*
     HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), // partial -> dup, inplace
                                     hetu::impl::AllReduce, predict_logits_partial,
                                     predict_logits, kSUM, _comm_group,
                                     op->instantiation_ctx().stream());
+    */
     NDArray::MarkUsedBy({predict_logits_partial}, op->instantiation_ctx().stream());
 
     // 4. log(sum(e^x)) - x[label], shape = [batch_size * seq_len, 1]

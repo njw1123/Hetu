@@ -253,15 +253,22 @@ void ExecutableGraph::PreRun(std::vector<RuntimeContext>& runtime_ctx_list) {
       }
       // origin param是本地但是transfer param不是
       else if (is_param_local && !is_transfer_param_local) {
-        HT_ASSERT(cur_subgraph->ops_topo().back().get()->num_outputs() == 0)
-          << "nonlocal transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have no output tensor";
-        HT_ASSERT(tensor2data.size() == 0)
-          << "nonlocal transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have no input or output NDarray after running";
+        HT_ASSERT(cur_subgraph->ops_topo().back().get()->num_outputs() == 0
+                  || cur_subgraph->ops_topo().back().get()->output(0)->num_consumers() == 0)
+          << "nonlocal transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have no useful output tensor";        
+        if (cur_subgraph->ops_topo().back().get()->num_outputs() == 0) {
+          HT_ASSERT(tensor2data.size() == 0)
+            << "nonlocal transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have no input or output NDarray after running";
+        } else {
+          HT_ASSERT(tensor2data.size() == 1)
+            << "nonlocal transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should only have one unuseful output NDarray after running";
+        }
       }
       // transfer param是本地的
       else {
-        HT_ASSERT(cur_subgraph->ops_topo().back().get()->num_outputs() == 1)
-          << "local transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have only one output tensor";
+        HT_ASSERT(cur_subgraph->ops_topo().back().get()->num_outputs() == 1
+                  && cur_subgraph->ops_topo().back().get()->output(0)->num_consumers() >= 1)
+          << "local transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have only one useful output tensor";
         HT_ASSERT(tensor2data.size() == 1 && tensor2data.find(transfer_param->id()) != tensor2data.end())
           << "local transfer param optimize-compute bridge subgraph " << cur_subgraph->global_name() << " should have a single output NDarray after running";
       }

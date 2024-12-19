@@ -1,5 +1,5 @@
-TP_VALUES=(1 2 4 8)
-PP_VALUES=(1 2 4 8)
+TP_VALUES=(16)
+PP_VALUES=(1)
 
 # 循环 TP 和 PP 的值
 for TP in "${TP_VALUES[@]}"; do
@@ -8,7 +8,7 @@ for TP in "${TP_VALUES[@]}"; do
     if (( TP * PP < 9 )); then
       continue
     fi
-    if (( TP * PP > 16 )); then
+    if (( TP * PP > 31 )); then
       continue
     fi
     # 定义 EXP_FILE 的路径

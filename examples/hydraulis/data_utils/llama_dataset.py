@@ -83,7 +83,7 @@ class LLaMAJsonDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        return self.data[idx]
+        return np.array(self.data[idx])
 
 def get_mask_and_position_ids(tokens, pad):
     batch_size, seq_length = tokens.shape

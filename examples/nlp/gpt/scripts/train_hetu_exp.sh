@@ -9,12 +9,12 @@ NUM_HEADS=64
 MICRO_BATCH_SIZE=1
 GLOBAL_BATCH_SIZE=16
 FFN_HIDDEN_SIZE=17920
-SERVER_ADDR="30.207.99.90"
+SERVER_ADDR="30.207.98.70"
 # SERVER_ADDR="172.24.10.109"
 # SERVER_ADDR="172.24.93.179" # worker-0
 # SERVER_ADDR="127.0.0.1" # 216
 SERVER_PORT="23462"
-HOST_FILE_PATH="/jizhicfs/hymiezhao/lhy/hostfiles/host01.yaml"
+HOST_FILE_PATH="/jizhicfs/hymiezhao/lhy/hostfiles/host0123.yaml"
 ENV_FILE_PATH="./scripts/env_A800.sh"
 
 NUM_GPUS=$(expr $TP \* $PP \* $DP)
@@ -60,8 +60,8 @@ if [ ! -e "$EXP_FILE" ]; then
 	> "$EXP_FILE"
 fi
 
-if (( TP == 8 && PP == 1 )); then
-	START_SEQ=24960
+if (( TP == 8 && PP == 4 )); then
+	START_SEQ=8448
 elif (( TP == 8 && PP == 2 )); then
 	START_SEQ=128
 else

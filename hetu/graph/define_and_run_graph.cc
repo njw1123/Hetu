@@ -1327,7 +1327,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
   }
 
   bool is_transfer_param_hot_switch = false;
-  bool is_empty_cache = true;
+  bool is_empty_cache = false;
   // 需要切换exec graph
   if (save_checkpoint) {
     // 存储param时不需要热切换
@@ -1337,7 +1337,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
     HT_LOG_DEBUG << local_device << ": [Graph Plan] Context switch to the new exec plan begin...";
     // 热切换
     if (_is_active) {
-      is_empty_cache = false;
+      bool need_hot_switch = true;
       auto key = std::make_pair(_active_exec_plan, next_active_exec_plan);
       if (_param_switcher_pool.find(key) == _param_switcher_pool.end()) {
         _param_and_opt_var_bucket_switcher_pool[key] = std::unordered_map<DataType, std::vector<std::shared_ptr<SwitchExecGraph>>>();
@@ -1376,6 +1376,10 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
                   || old_exec_graph->_run_level == RunLevel::UPDATE) 
           << "graph with RunLevel::ALLOC should only follow behind graph with RunLevel::TOPO or RunLevel::ALLOC or RunLevel::UPDATE right now";
       }
+      if (_run_level == RunLevel::COMPUTE_ONLY) {
+        HT_ASSERT(old_exec_graph->_run_level == RunLevel::COMPUTE_ONLY) 
+          << "graph with RunLevel::COMPUTE_ONLY should only follow behind graph with RunLevel::COMPUTE_ONLY right now";
+      }
       if (old_exec_graph->_run_level == RunLevel::GRAD) {
         HT_ASSERT(_run_level == RunLevel::GRAD
                   || _run_level == RunLevel::UPDATE) 
@@ -1393,6 +1397,14 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
       if (old_exec_graph->_run_level == RunLevel::ALLOC) {
         grad_switch_level = SWITCH_LEVEL::TOPO;
         is_empty_cache = true;
+      }
+      // 如果旧的exec graph只是compute
+      // 其什么都没有产生
+      if (old_exec_graph->_run_level == RunLevel::COMPUTE_ONLY) {
+        param_switch_level = SWITCH_LEVEL::TOPO;
+        grad_switch_level = SWITCH_LEVEL::TOPO;
+        need_hot_switch = false; // workaround: 强行不switch
+        old_exec_graph->_preserved_data.clear(); // 不hot switch则直接把之前的exec graph空间强行释放
       }
       // 如果旧的exec graph是update
       // grad已经被消耗掉了
@@ -1428,7 +1440,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
       // 3、----- buffer释放 -----
       // 如果旧的exec graph是grad
       // 那么热切换需要释放之前的current grad buffer
-      // 如果旧的exec graph是update
+      // 如果旧的exec graph是update或compute
       // 那么热切换需要释放之前的transfer param buffer和current grad buffer
       if (old_exec_graph->_run_level == RunLevel::GRAD) {
         if (old_exec_graph->_use_current_grad_buffer) {
@@ -1442,7 +1454,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
           }
         }
       }
-      if (old_exec_graph->_run_level == RunLevel::UPDATE) {
+      if (old_exec_graph->_run_level == RunLevel::UPDATE || old_exec_graph->_run_level == RunLevel::COMPUTE_ONLY) {
         for (auto it = old_exec_graph->_transfer_param_buffer_map.begin(); 
              it != old_exec_graph->_transfer_param_buffer_map.end(); ++it) {
           if (!it->second->IsEmpty()) {
@@ -1479,78 +1491,80 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
           << " and ds is: " << tensor->get_distributed_states().ds_info();
       }
       */
-      // 实际热切换
-      // 目前已修改成async版本
-      // 如果要改成非async的
-      // 更改环境变量HETU_SWITCH_PROFILE低于TIME即可
-      // TODO: 实现CPU上的Switch（例如AdamOp的step，其目前并不在buffer中）
-      if (param_switch_mode == SWITCH_MODE::SWITCH_TRANSFER_PARAM
-          || param_switch_mode == SWITCH_MODE::SWITCH_ORIGIN_PARAM) {
-        HT_ASSERT(param_switch_mode != SWITCH_MODE::SWITCH_ORIGIN_PARAM)
-          << "SWITCH_MODE::SWITCH_ORIGIN_PARAM is currently deprecated";
-        /*
-        // 策略一样的情况下单独特判直接复用显存即可
-        if (param_switch_level == SWITCH_LEVEL::EXEC && old_exec_graph->COMPUTE_STRATEGY_ID == new_exec_graph->COMPUTE_STRATEGY_ID) {
-          param_switch_level = SWITCH_LEVEL::DIRECT_BIND;
+      if (need_hot_switch) {
+        // 实际热切换
+        // 目前已修改成async版本
+        // 如果要改成非async的
+        // 更改环境变量HETU_SWITCH_PROFILE低于TIME即可
+        // TODO: 实现CPU上的Switch（例如AdamOp的step，其目前并不在buffer中）
+        if (param_switch_mode == SWITCH_MODE::SWITCH_TRANSFER_PARAM
+            || param_switch_mode == SWITCH_MODE::SWITCH_ORIGIN_PARAM) {
+          HT_ASSERT(param_switch_mode != SWITCH_MODE::SWITCH_ORIGIN_PARAM)
+            << "SWITCH_MODE::SWITCH_ORIGIN_PARAM is currently deprecated";
+          /*
+          // 策略一样的情况下单独特判直接复用显存即可
+          if (param_switch_level == SWITCH_LEVEL::EXEC && old_exec_graph->COMPUTE_STRATEGY_ID == new_exec_graph->COMPUTE_STRATEGY_ID) {
+            param_switch_level = SWITCH_LEVEL::DIRECT_BIND;
+          }
+          */
+          for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
+            DataType dtype = static_cast<DataType>(i);
+            _param_switcher_pool[key][dtype]->SwitchParams(param_switch_mode, param_switch_level, "switch transfer params " + DataType2Str(dtype));
+          }
+          if (param_switch_level != SWITCH_LEVEL::TOPO) {
+            is_transfer_param_hot_switch = true;
+          }
         }
-        */
-        for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
-          DataType dtype = static_cast<DataType>(i);
-          _param_switcher_pool[key][dtype]->SwitchParams(param_switch_mode, param_switch_level, "switch transfer params " + DataType2Str(dtype));
-        }
-        if (param_switch_level != SWITCH_LEVEL::TOPO) {
-          is_transfer_param_hot_switch = true;
-        }
-      }
-      // 按buckets的顺序进行switch
-      else {
-        // 策略一样的情况下单独特判直接复用显存即可
-        if (param_switch_level == SWITCH_LEVEL::EXEC && old_exec_graph->OPTIMIZE_STRATEGY_ID == new_exec_graph->OPTIMIZE_STRATEGY_ID) {
-          param_switch_level = SWITCH_LEVEL::DIRECT_BIND;
-        }
-        for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
-          DataType dtype = static_cast<DataType>(i);
-          size_t buckets_size = old_exec_graph->_origin_param_and_optimizer_buckets_map[dtype]->buckets_size();
-          if (_param_and_opt_var_bucket_switcher_pool[key][dtype].empty()) {
-            // 统一使用全局的通信组
-            // TODO: 后续使用实际参与的所有device
-            std::unordered_set<Device> comm_set = {};
-            const auto& global_device_group = hetu::impl::comm::GetGlobalDeviceGroup();
-            for (const auto& device : global_device_group.devices()) {
-              comm_set.emplace(device);
+        // 按buckets的顺序进行switch
+        else {
+          // 策略一样的情况下单独特判直接复用显存即可
+          if (param_switch_level == SWITCH_LEVEL::EXEC && old_exec_graph->OPTIMIZE_STRATEGY_ID == new_exec_graph->OPTIMIZE_STRATEGY_ID) {
+            param_switch_level = SWITCH_LEVEL::DIRECT_BIND;
+          }
+          for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
+            DataType dtype = static_cast<DataType>(i);
+            size_t buckets_size = old_exec_graph->_origin_param_and_optimizer_buckets_map[dtype]->buckets_size();
+            if (_param_and_opt_var_bucket_switcher_pool[key][dtype].empty()) {
+              // 统一使用全局的通信组
+              // TODO: 后续使用实际参与的所有device
+              std::unordered_set<Device> comm_set = {};
+              const auto& global_device_group = hetu::impl::comm::GetGlobalDeviceGroup();
+              for (const auto& device : global_device_group.devices()) {
+                comm_set.emplace(device);
+              }
+              for (int32_t bucket_num = 0; bucket_num < buckets_size; bucket_num++) {
+                _param_and_opt_var_bucket_switcher_pool[key][dtype].emplace_back(std::make_shared<SwitchExecGraph>(this, _active_exec_plan, next_active_exec_plan, dtype, bucket_num, comm_set, std::unordered_map<DataType, DataType>{{DataType::FLOAT32, DataType::FLOAT32}}));
+              }
             }
+            // 实际bucket热切换
             for (int32_t bucket_num = 0; bucket_num < buckets_size; bucket_num++) {
-              _param_and_opt_var_bucket_switcher_pool[key][dtype].emplace_back(std::make_shared<SwitchExecGraph>(this, _active_exec_plan, next_active_exec_plan, dtype, bucket_num, comm_set, std::unordered_map<DataType, DataType>{{DataType::FLOAT32, DataType::FLOAT32}}));
+              _param_and_opt_var_bucket_switcher_pool[key][dtype][bucket_num]->SwitchParams(param_switch_mode, param_switch_level, "switch params and opt-states dtype " + DataType2Str(dtype) + " bucket " + std::to_string(bucket_num));
             }
           }
-          // 实际bucket热切换
+          // old version w/o dtype (Malleus exp only)
+          /*
+          // tricky part
+          // topo caculation could be "overlapped"
           for (int32_t bucket_num = 0; bucket_num < buckets_size; bucket_num++) {
-            _param_and_opt_var_bucket_switcher_pool[key][dtype][bucket_num]->SwitchParams(param_switch_mode, param_switch_level, "switch params and opt-states dtype " + DataType2Str(dtype) + " bucket " + std::to_string(bucket_num));
+            _param_and_opt_var_bucket_switcher_pool[key][bucket_num]->SwitchParams(param_switch_mode, SWITCH_LEVEL::TOPO, "switch params and opt-states bucket " + std::to_string(bucket_num));
           }
+          auto& global_mpi_group = hetu::impl::comm::MPICommunicationGroup::GetOrCreateWorldwide();
+          global_mpi_group->Barrier(true);
+          TIK(switch_buckets_time);
+          for (int32_t bucket_num = 0; bucket_num < buckets_size; bucket_num++) {
+            _param_and_opt_var_bucket_switcher_pool[key][bucket_num]->SwitchParams(param_switch_mode, param_switch_level, "switch params and opt-states bucket " + std::to_string(bucket_num));
+          }
+          SynchronizeAllStreams();
+          global_mpi_group->Barrier(true);
+          TOK(switch_buckets_time);
+          HT_LOG_WARN << "switch buckets time = " << COST_MSEC(switch_buckets_time) << " ms";
+          */
         }
-        // old version w/o dtype (Malleus exp only)
-        /*
-        // tricky part
-        // topo caculation could be "overlapped"
-        for (int32_t bucket_num = 0; bucket_num < buckets_size; bucket_num++) {
-          _param_and_opt_var_bucket_switcher_pool[key][bucket_num]->SwitchParams(param_switch_mode, SWITCH_LEVEL::TOPO, "switch params and opt-states bucket " + std::to_string(bucket_num));
-        }
-        auto& global_mpi_group = hetu::impl::comm::MPICommunicationGroup::GetOrCreateWorldwide();
-        global_mpi_group->Barrier(true);
-        TIK(switch_buckets_time);
-        for (int32_t bucket_num = 0; bucket_num < buckets_size; bucket_num++) {
-          _param_and_opt_var_bucket_switcher_pool[key][bucket_num]->SwitchParams(param_switch_mode, param_switch_level, "switch params and opt-states bucket " + std::to_string(bucket_num));
-        }
-        SynchronizeAllStreams();
-        global_mpi_group->Barrier(true);
-        TOK(switch_buckets_time);
-        HT_LOG_WARN << "switch buckets time = " << COST_MSEC(switch_buckets_time) << " ms";
-        */
-      }
-      if (!(grad_switch_level == SWITCH_LEVEL::TOPO && !_need_grad_switch_topo)) {
-        for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
-          DataType dtype = static_cast<DataType>(i);
-          _grad_switcher_pool[key][dtype]->SwitchParams(grad_switch_mode, grad_switch_level, "switch grads " + DataType2Str(dtype));
+        if (!(grad_switch_level == SWITCH_LEVEL::TOPO && !_need_grad_switch_topo)) {
+          for (int i = 0; i < static_cast<int>(DataType::NUM_DATA_TYPES); i++) {
+            DataType dtype = static_cast<DataType>(i);
+            _grad_switcher_pool[key][dtype]->SwitchParams(grad_switch_mode, grad_switch_level, "switch grads " + DataType2Str(dtype));
+          }
         }
       }
     }
@@ -1622,3 +1636,4 @@ NDArrayList DefineAndRunGraph::Run(const TensorList& fetches,
 
 } // namespace graph
 } // namespace hetu
+

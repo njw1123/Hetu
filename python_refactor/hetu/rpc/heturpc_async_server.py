@@ -53,6 +53,7 @@ class DeviceController(heturpc_pb2_grpc.DeviceControllerServicer):
             if nodename not in self.local_worldsizes:
                 self.local_worldsizes[nodename] = 0
                 self.nodenames.append(nodename)
+            print(nodename, "connect")
             self.local_worldsizes[nodename] += 1
             self.worldsize += 1
         return heturpc_pb2.ConnectReply(status=1)
@@ -278,7 +279,7 @@ class DeviceController(heturpc_pb2_grpc.DeviceControllerServicer):
         return heturpc_pb2.HeartBeatReply(status=1)
 
 def serve(arr, exit_arr, last_heartbeat, port):
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=32))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=64))
     heturpc_pb2_grpc.add_DeviceControllerServicer_to_server(DeviceController(arr, exit_arr, last_heartbeat), server)
     server.add_insecure_port("[::]:" + port)
     server.start()
@@ -288,8 +289,8 @@ def serve(arr, exit_arr, last_heartbeat, port):
 def server_launch(port):
     logging.basicConfig()
     arr = multiprocessing.Array("i", [0], lock=True)
-    exit_arr = multiprocessing.Array("i", [0] * 32, lock=True)
-    last_heartbeat = multiprocessing.Array("d", [0.0] * 32, lock=True)
+    exit_arr = multiprocessing.Array("i", [0] * 64, lock=True)
+    last_heartbeat = multiprocessing.Array("d", [0.0] * 64, lock=True)
     p = multiprocessing.Process(target=serve, args=(arr, exit_arr, last_heartbeat, port))
     p.start()
     while True:

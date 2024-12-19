@@ -11,7 +11,7 @@ from heturpc_async_server_exp import server_launch
 import multiprocessing.spawn
 
 # enable_host_logger()
-TIMEOUT = 240 # 如果240s之间log都没有增加我们认为其卡死
+TIMEOUT = 180 # 如果180s之间log都没有增加我们认为其卡死
 
 def read_yaml(file_path):
     with open(file_path, "r") as f:
@@ -32,6 +32,8 @@ def pssh(args):
             min_workers = int(host['min_workers'])
             max_workers = int(host['max_workers'])
             for i in range(initial_workers):
+                if len(hostnames) == args.ngpus:
+                    break
                 hostnames.append(addr)
     print("HostNames:", hostnames)
     train_command = args.command
@@ -105,6 +107,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--command", type=str, default='uname', help="command for pssh"
+    )
+    parser.add_argument(
+        "--server_addr", type=str, default='127.0.0.1', help="server's address"
+    )
+    parser.add_argument(
+        "--server_port", type=str, default='23457', help="server's port"
     )
     parser.add_argument(
         "--ngpus", type=int, default=8, help="num gpus"

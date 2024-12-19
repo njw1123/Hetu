@@ -115,18 +115,23 @@ def process_strategy(args):
         True, (compute_strategy_id, gpu_id, dp_id, dp_size, dp_representive_gpu), 
         dynamic_strategy, strategy_pool, match_id_list, max_seqlen_list, dp_id, sorted_len
     )
+    # print(f"strategy {compute_strategy_id}, dp {dp_id}, batch_indices is {batch_indices}")
     
     # hydraulis packing: balanced packing with utilization guaranteed
     if batching_method == 4:
-        # Call batching strategy (distributed)
-        estimated_cost_2, batching_option_matrix = distributed_call(
-            func_call_folder, tag,
-            True, (compute_strategy_id, gpu_id, dp_id, dp_size, dp_representive_gpu), 
-            batching_strategy, strategy_pool, match_id_list[dp_id], 
-            sorted_len[batch_indices], max_seqlen_list[dp_id]
-        )
-        if not isinstance(batching_option_matrix, np.ndarray):
-            print(f"{local_device}: {compute_strategy_id}-th strategy {dp_id}-th dp cannot guarantee the sequence utilization, the seqs that need to pack is {sorted_len[batch_indices]}")
+        if batch_indices is None:
+            estimated_cost_2 = float('inf')
+            batching_option_matrix = None
+        else:
+            # Call batching strategy (distributed)
+            estimated_cost_2, batching_option_matrix = distributed_call(
+                func_call_folder, tag,
+                True, (compute_strategy_id, gpu_id, dp_id, dp_size, dp_representive_gpu), 
+                batching_strategy, strategy_pool, match_id_list[dp_id], 
+                sorted_len[batch_indices], max_seqlen_list[dp_id]
+            )
+            if not isinstance(batching_option_matrix, np.ndarray):
+                print(f"{local_device}: {compute_strategy_id}-th strategy {dp_id}-th dp cannot guarantee the sequence utilization, the seqs that need to pack is {sorted_len[batch_indices]}")
     # greedy packing
     else:
         estimated_cost_2, batching_option_matrix = None, None
@@ -143,7 +148,8 @@ def find_optimal_strategy(
     
     # 先筛选出可以跑当前max_seqlen的strategy
     compute_strategy_id_list = [id for id in compute_strategy_id_list if max(multi_max_seqlen_list[id]) >= sorted_len[-1]]
-
+    assert len(compute_strategy_id_list) > 0, f"no strategy can afford current max seqlen {sorted_len[-1]} in the global batch"
+   
     # Prepare arguments for multiprocessing
     args_list = [
         (
@@ -187,3 +193,4 @@ def find_optimal_strategy(
     
     return (compute_strategy_id_list[min_cost_index], optimal_estimated_cost_1, optimal_batch_indices, 
             optimal_estimated_cost_2, optimal_batching_option_matrix)
+

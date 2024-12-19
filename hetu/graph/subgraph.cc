@@ -223,6 +223,7 @@ void SubGraph::run(Tensor2NDArrayMap& tensor2data, const Tensor2NDArrayMap& pres
       }
     }
     // 调用op计算
+    // debug stuck bug use
     // HT_LOG_INFO << "subgraph " << _global_name << " execute " << op << " begin";
     NDArrayList output_vals = op->Compute(input_vals, runtime_ctx, micro_batch_id);
     checkOutputsMemory(op, micro_batch_id, input_vals, output_vals);

@@ -219,7 +219,7 @@ class DistributedStatesUnion {
   }
 
   const DistributedStatesUnion to_hetero(int32_t dim, int32_t num) const {
-    HT_ASSERT(is_hetero())
+    HT_ASSERT(!is_hetero())
       << "The union is already hetero";
     HT_ASSERT(_union.size() == 1)
       << "Double check, the union is already hetero";
