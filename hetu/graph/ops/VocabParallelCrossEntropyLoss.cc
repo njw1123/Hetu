@@ -51,7 +51,8 @@ void VocabParallelCrossEntropyOpImpl::DoCompute(
   if (op->input(0)->get_local_distributed_states().get_dim(1) == 1) {
     // no tp vocab parallel, just pure dp
     // illegal memory access may occur
-    NDArray::sceloss(preds, labels, ignored_index(), reduction(), op->instantiation_ctx().stream_index, outputs.at(0));    
+    HT_LOG_WARN << "sceloss will cause illegal memory access, need to fix it";
+    // NDArray::sceloss(preds, labels, ignored_index(), reduction(), op->instantiation_ctx().stream_index, outputs.at(0));    
   } else { 
     // tp vocab parallel loss
     DeviceGroup _comm_group = get_devices_by_dim(op->input(0), 1);

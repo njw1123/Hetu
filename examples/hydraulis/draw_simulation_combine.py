@@ -108,7 +108,7 @@ def draw_sample_simulation(datasets, labels, global_batch_size=None, global_toke
 
     # 调整子图布局
     plt.tight_layout()  
-
+    
     # 保存并展示图像
     plt.savefig(f"{simulation_file_path}.png", format="png", pad_inches=0.01, bbox_inches="tight")
     plt.savefig(f"{simulation_file_path}.svg", format="svg", pad_inches=0.01, bbox_inches="tight")

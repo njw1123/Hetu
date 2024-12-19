@@ -855,6 +855,7 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
       continue;
     }
 
+    // debug stuck bug use
     // HT_LOG_INFO << local_device << ": micro batch " << micro_batch_id << " op execute " << op << " on stream " << op->stream_index() << " begin...";
     // batched p2p send & recv
     // 跨hetero stage的batchedIsendIrecv已经包了一层ncclGroupStart和ncclGroupEnd
@@ -975,6 +976,7 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
         tensor2data[output->id()] = output_vals[i];
       } 
     }
+    // debug stuck bug use
     // op->instantiation_ctx().stream().Sync();
     // HT_LOG_INFO << local_device << ": micro batch " << micro_batch_id << " op execute " << op << " end...";
 
@@ -1613,6 +1615,7 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
       Instantiate(fetches, local_device);
       HT_LOG_INFO << local_device << ": [Execution Plan] Instantiate end...";
 
+      /*
       // init instantiated topo
       OpRefList topo_before_recompute = Graph::TopoSort(fetches, num_ops(), is_op_computed);
       HT_LOG_DEBUG << local_device << ": global topo before recompute pass: " << topo_before_recompute;
@@ -1635,6 +1638,7 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
       ActivationCPUOffload::OffloadToCPU(topo_before_activation_offload);
       Graph::pop_graph_ctx();
       HT_LOG_INFO << local_device << ": [Execution Plan] activation offload pass end...";
+      */
 
       // init topo contains comm_op
       OpRefList topo_before_substitute_comm = Graph::TopoSort(fetches, num_ops(), is_op_computed);

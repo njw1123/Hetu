@@ -1,6 +1,6 @@
 import json
 
-json_path = "strategy_pool_7b.json"
+json_path = "strategy_pool_7b_A100.json"
 
 def generate_json(data):
     with open(json_path, 'w') as f:
@@ -11,7 +11,7 @@ if __name__ == '__main__':
     # 自定义数据
     hidden_size = 4096
     num_layers = 32
-    vocab_size = 30592
+    vocab_size = 50304
     # tp_pp_list = [(1, 4), (1, 8), (2, 2), (2, 4), (2, 8), (4, 1), (4, 2), (4, 4), (8, 1), (8, 2)]
     # a_list = [-1.52587891e-05, -2.31879928e-06, -9.26268522e-06, -4.85685844e-07, -3.56593792e-08, -2.68655783e-06, -4.95452836e-08, 6.98499776e-08, -4.03883018e-07, 1.37774147e-07]
     # b_list = [8.01809211e-02, 3.44067829e-02, 8.59247240e-02, 3.36870955e-02, 1.66097866e-02, 8.38166218e-02, 3.63550659e-02, 1.80880312e-02, 4.83143430e-02, 2.10431364e-02]
@@ -24,10 +24,10 @@ if __name__ == '__main__':
     memory_A = {'tp1': 38, 'tp2': 39, 'tp4': 42, 'tp8': 48}
     memory_B = 197
     memory_alpha = 0.75
-    memory_gap = {'gpu1': 5000 * (1024 ** 2), 'gpu2': 5000 * (1024 ** 2), 'gpu4': 5000 * (1024 ** 2), 'node': 5000 * (1024 ** 2)}
-    memory_safe_bound = 2 * (1024 ** 3)
+    memory_gap = {'gpu1': 1755 * (1024 ** 2), 'gpu2': 4831 * (1024 ** 2), 'gpu4': 7299 * (1024 ** 2), 'node': 12281 * (1024 ** 2)}
+    memory_safe_bound = 4 * (1024 ** 3)
     gpus_per_node = 8
-    gpu_memory_bound = (81252) * (1024 ** 2)
+    gpu_memory_bound = (40536) * (1024 ** 2)
     hetero_dp_comm_cost = 300 # ms
     # 生成json
     strategy_list = []

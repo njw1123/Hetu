@@ -34,6 +34,9 @@ def pssh(args):
             min_workers = int(host['min_workers'])
             max_workers = int(host['max_workers'])
             for i in range(initial_workers):
+                # workaround: 当不使用host的全部gpu时优先按顺序使用
+                if len(hostnames) == args.ngpus:
+                    break
                 hostnames.append(addr)
                 ports.append(port)
                 passwords.append(password)

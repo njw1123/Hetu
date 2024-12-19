@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from typing import List
 from .cost_model import dynamic_strategy_time_cost
 
-MAX_WORKERS = 1
+MAX_WORKERS = 16
 TRIAL_WORKERS = 1
 MINI_TRIAL_NUM = 50
 
@@ -27,7 +27,7 @@ def process_trial(trial, batch_seqlen_array, strategy_pool, sorted_max_seqlen_li
     def cached_dynamic_strategy_time_cost(strategy_id, seqlen):
         return dynamic_strategy_time_cost(strategy_pool, strategy_id, seqlen)
         
-    for mini_trial in tqdm(range(trial, trial + MINI_TRIAL_NUM)):
+    for mini_trial in range(trial, trial + MINI_TRIAL_NUM):
         random.seed(mini_trial)
         shuffled_indices = original_indices.copy()
         random.shuffle(shuffled_indices)
@@ -385,7 +385,7 @@ def batching_strategy(strategy_pool, strategy_id: int, seqs: List[int], max_seql
     min_num_micro_batches = max(1, (total_tokens + max_seqlen - 1) // max_seqlen)
     max_num_micro_batches = min(len(seqs), total_tokens // util_seqlen)
     max_num_micro_batches = max(min_num_micro_batches, max_num_micro_batches)
-    num_micro_batches_enum = range(min_num_micro_batches, min(max_num_micro_batches + 1, min_num_micro_batches + 20))
+    num_micro_batches_enum = range(min_num_micro_batches, min(max_num_micro_batches + 1, min_num_micro_batches + 16))
     costs = [dynamic_strategy_time_cost(strategy_pool, strategy_id, seq) for seq in seqs]
     results = []
     start_time = time.time()
@@ -433,3 +433,4 @@ if __name__ == '__main__':
 
     optimal_o = batching_strategy(data, strategy_id, seqs, max_seqlen)
     print("Optimal Assignment Matrix (o):", optimal_o)
+

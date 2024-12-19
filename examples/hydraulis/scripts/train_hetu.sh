@@ -13,7 +13,10 @@ SERVER_ADDR=${7:-"172.24.10.109"} # master-0
 SERVER_PORT=${8:-"23333"}
 HOST_FILE_PATH=${9:-"./scripts/host.yaml"}
 ENV_FILE_PATH=${10:-"./scripts/env_A100.sh"}
+STRATEGY_POOL_PATH=${11:-"./strategy/strategy_pool_7b_A100.json"}
 
+WARM_UP=1
+COMPUTE_ONLY=0
 TORCH_PROFILE=0
 CASE=0
 if [[ ${CASE} -eq 0 ]]; then
@@ -77,17 +80,20 @@ MERGE_FILE=${ROOT_FOLDER}/merges.txt
 
 # compute-sanitizer can be added in front of python3 to check illegal mem access bug
 CMD="python3 -u train_hetu.py \
+--warm_up $WARM_UP \
+--compute_only $COMPUTE_ONLY \
 --torch_profile $TORCH_PROFILE \
 --batching_method $BATCHING_METHOD \
 --multi_tp_pp_list \"${MULTI_TP_PP_LIST}\" \
 --global_batch_size $GLOBAL_BATCH_SIZE \
 --global_token_num $GLOBAL_TOKEN_NUM \
 --max_seq_len $MAX_SEQ_LEN \
+--strategy_pool $STRATEGY_POOL_PATH \
 --json_file $JSON_FILE \
 --json_key $JSON_KEY \
 --vocab_file $VOCAB_FILE \
 --merge_file $MERGE_FILE \
---vocab_size 30592 \
+--vocab_size 50304 \
 --hidden_size $HIDDEN_SIZE \
 --ffn_hidden_size $FFN_HIDDEN_SIZE \
 --num_hidden_layers $NUM_LAYERS \
@@ -105,19 +111,10 @@ CMD="python3 -u train_hetu.py \
 --ngpus ${NUM_GPUS}"
 
 source ${ENV_FILE_PATH}
-if [ ${NUM_GPUS} -gt 8 ]; then
 python3 ../../python_refactor/hetu/rpc/pssh_start.py \
-	--hosts ${HOST_FILE_PATH} \
-	--command "$CMD" \
-	--server_port ${SERVER_PORT} \
-	--ngpus ${NUM_GPUS} \
-	--envs ${ENV_FILE_PATH} \
-	--log_path ${LOG_FOLDER}
-else
-python3 ../../python_refactor/hetu/rpc/pssh_start.py \
-	--command "$CMD" \
-	--server_port ${SERVER_PORT} \
-	--ngpus ${NUM_GPUS} \
-	--envs ${ENV_FILE_PATH} \
-	--log_path ${LOG_FOLDER}
-fi
+--hosts ${HOST_FILE_PATH} \
+--command "$CMD" \
+--server_port ${SERVER_PORT} \
+--ngpus ${NUM_GPUS} \
+--envs ${ENV_FILE_PATH} \
+--log_path ${LOG_FOLDER}

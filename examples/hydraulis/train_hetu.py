@@ -221,6 +221,7 @@ def pretrain(args):
         optimize_strategy_id,
         run_level=ht.run_level("update")
     ):
+        # return None
         try:
             results = train_op.graph.run(
                 loss, 
@@ -390,7 +391,6 @@ def pretrain(args):
             if stage_id == tp_pp_list[dp_id][1] - 1 and len(results) > 0:
                 loss_out = results[0].numpy(force=True).mean()
                 print(f"{local_device}: [Epoch {epoch}] (step {step}, consumed_samples = {consumed_samples}): loss = {loss_out:.3f}, time = {end_time - start_time:.4f}")
-        
         return consumed_samples
     
     # 运行
@@ -536,3 +536,4 @@ if __name__ == '__main__':
         with ht.autocast(eval(precision)):            
             pretrain(args)
             print(f'{local_device}: train hetu ds parallel end...')
+

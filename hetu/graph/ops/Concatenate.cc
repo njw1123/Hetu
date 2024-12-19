@@ -38,7 +38,7 @@ void ConcatenateOpImpl::DoCompute(Operator& op,
           HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                        hetu::impl::DataTransfer, inputs.at(i), output,
                                        op->instantiation_ctx().stream());
-          HT_LOG_WARN << op << " data transfer may be avoided (unless you are hot switching)";
+          // HT_LOG_WARN << op << " data transfer may be avoided (unless you are hot switching)";
         }
         offset += inputs.at(i)->numel();
       }

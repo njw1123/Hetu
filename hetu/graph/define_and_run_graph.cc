@@ -1636,3 +1636,4 @@ NDArrayList DefineAndRunGraph::Run(const TensorList& fetches,
 
 } // namespace graph
 } // namespace hetu
+
