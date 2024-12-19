@@ -5,7 +5,6 @@ import time
 import fcntl
 import concurrent.futures
 import numpy as np
-import hetu as ht
 from typing import Callable, Any, Tuple, Dict
 from .dynamic_pulp import dynamic_strategy, batching_strategy
 
@@ -18,9 +17,11 @@ def increase_file_descriptor_limit():
     # print(f"New soft limit: {new_soft_limit}")
 
 # 在主程序开始时调用
-increase_file_descriptor_limit()
+# increase_file_descriptor_limit()
+MAX_WORKERS = 1
 func_call_folder = "./func_call"
 tag = 0
+strategy_cache = {}
 
 # workaround
 # hope to leverage grpc in the future
@@ -63,7 +64,7 @@ def distributed_call(func_call_folder, tag, need_max_cost: bool, distributed_sta
                     finally:
                         fcntl.flock(file, fcntl.LOCK_UN)
             except Exception as e:
-                # print("Exception raise")
+                # print(f"Exception raise {e}")
                 time.sleep(1)  # 等待文件写入完成
                 continue
             if read_tag == tag:
@@ -93,7 +94,7 @@ def process_strategy(args):
         func_call_folder, tag,
         compute_strategy_id, multi_dp_size, multi_tp_pp_list, multi_max_seqlen_list, 
         multi_match_id_list, multi_gpu_pos, multi_dp_representive_gpu,
-        all_devices, local_device, batching_method, 
+        rank, batching_method, 
         strategy_pool, sorted_len
     ) = args
     
@@ -103,7 +104,7 @@ def process_strategy(args):
     match_id_list = multi_match_id_list[compute_strategy_id]
     gpu_pos = multi_gpu_pos[compute_strategy_id]
     dp_representive_gpu = multi_dp_representive_gpu[compute_strategy_id]
-    gpu_id = all_devices.get_index(local_device)
+    gpu_id = rank
     
     assert gpu_id in gpu_pos, f"gpu {gpu_id} is not included in this training"
     dp_id, stage_id = gpu_pos[gpu_id].dp_id, gpu_pos[gpu_id].stage_id
@@ -115,18 +116,24 @@ def process_strategy(args):
         True, (compute_strategy_id, gpu_id, dp_id, dp_size, dp_representive_gpu), 
         dynamic_strategy, strategy_pool, match_id_list, max_seqlen_list, dp_id, sorted_len
     )
+    # print(f"strategy {compute_strategy_id}, dp {dp_id}, estimated_cost_1 is {estimated_cost_1}")
     
     # hydraulis packing: balanced packing with utilization guaranteed
     if batching_method == 4:
-        # Call batching strategy (distributed)
-        estimated_cost_2, batching_option_matrix = distributed_call(
-            func_call_folder, tag,
-            True, (compute_strategy_id, gpu_id, dp_id, dp_size, dp_representive_gpu), 
-            batching_strategy, strategy_pool, match_id_list[dp_id], 
-            sorted_len[batch_indices], max_seqlen_list[dp_id]
-        )
-        if not isinstance(batching_option_matrix, np.ndarray):
-            print(f"{local_device}: {compute_strategy_id}-th strategy {dp_id}-th dp cannot guarantee the sequence utilization, the seqs that need to pack is {sorted_len[batch_indices]}")
+        if batch_indices is None:
+            estimated_cost_2 = float('inf')
+            batching_option_matrix = None
+        else:
+            # Call batching strategy (distributed)
+            estimated_cost_2, batching_option_matrix = distributed_call(
+                func_call_folder, tag,
+                True, (compute_strategy_id, gpu_id, dp_id, dp_size, dp_representive_gpu), 
+                batching_strategy, strategy_pool, match_id_list[dp_id], 
+                sorted_len[batch_indices], max_seqlen_list[dp_id]
+            )
+            # print(f"strategy {compute_strategy_id}, dp {dp_id}, estimated_cost_2 is {estimated_cost_2}")
+            if not isinstance(batching_option_matrix, np.ndarray):
+                print(f"rank {rank}: {compute_strategy_id}-th strategy {dp_id}-th dp cannot guarantee the sequence utilization, the seqs that need to pack is {sorted_len[batch_indices]}")
     # greedy packing
     else:
         estimated_cost_2, batching_option_matrix = None, None
@@ -136,21 +143,23 @@ def process_strategy(args):
 def find_optimal_strategy(
     compute_strategy_id_list, multi_dp_size, multi_tp_pp_list, multi_max_seqlen_list, 
     multi_match_id_list, multi_gpu_pos, multi_dp_representive_gpu,
-    all_devices, local_device, batching_method, 
-    strategy_pool, sorted_len
+    rank, batching_method, 
+    strategy_pool, sorted_len, 
+    save_strategy_cache=False, read_strategy_cache=False, strategy_cache_folder=None
 ):
-    global func_call_folder, tag
+    global func_call_folder, tag, strategy_cache
     
     # 先筛选出可以跑当前max_seqlen的strategy
     compute_strategy_id_list = [id for id in compute_strategy_id_list if max(multi_max_seqlen_list[id]) >= sorted_len[-1]]
-
+    assert len(compute_strategy_id_list) > 0, f"no strategy can afford current max seqlen {sorted_len[-1]} in the global batch"
+   
     # Prepare arguments for multiprocessing
     args_list = [
         (
             func_call_folder, tag,
             compute_strategy_id, multi_dp_size, multi_tp_pp_list, multi_max_seqlen_list, 
             multi_match_id_list, multi_gpu_pos, multi_dp_representive_gpu,
-            all_devices, local_device, batching_method, 
+            rank, batching_method, 
             strategy_pool, sorted_len
         )
         for compute_strategy_id in compute_strategy_id_list
@@ -158,9 +167,27 @@ def find_optimal_strategy(
 
     # print(f"Simutaneously handle strategies {compute_strategy_id_list}")
     
+    results = []
+    skip_run = False
     start_time = time.time()
-    with concurrent.futures.ProcessPoolExecutor(max_workers=min(len(args_list), 32)) as executor:
-        results = list(executor.map(process_strategy, args_list))
+    if read_strategy_cache:
+        with open(strategy_cache_folder + f"/{rank}_cache.pkl", 'rb') as f:
+            strategy_cache = pickle.load(f)
+        if tag in strategy_cache:
+            results = strategy_cache[tag]
+            skip_run = True
+    if not skip_run:
+        if MAX_WORKERS == 1:  
+            for args in args_list:
+                result = process_strategy(args)
+                results.append(result)
+        else:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=min(len(args_list), MAX_WORKERS)) as executor:
+                results = list(executor.map(process_strategy, args_list))
+    if save_strategy_cache:
+        strategy_cache[tag] = results
+        with open(strategy_cache_folder + f"/{rank}_cache.pkl", 'wb') as f:
+            pickle.dump(strategy_cache, f)
     tag += 1
     end_time = time.time()
     print(f"Find optimal seqs-assigning & seqs-batching strategy time cost: {end_time - start_time}s")

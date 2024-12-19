@@ -19,6 +19,8 @@ def pssh(args):
     passwords = []
     if args.hosts is None:
         hostnames = ['localhost'] * args.ngpus
+        ports = [22] * args.ngpus
+        passwords = [None] * args.ngpus
     else:
         host_info = read_yaml(args.hosts)
         max_restart_times = host_info['max_restart_times']

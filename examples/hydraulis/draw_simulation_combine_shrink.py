@@ -23,7 +23,7 @@ matplotlib.rcParams['ps.fonttype'] = 42
 
 def draw_sample_simulation(datasets, labels, global_batch_size=None, global_token_num=100000, simulation_file_path="simulation"):
     # 创建 1x4 的子图布局，宽度比例为 3:1:3:1
-    fig, axs = plt.subplots(1, 4, figsize=(16, 4), gridspec_kw={'width_ratios': [3, 1, 3, 1]}, sharex='col')
+    fig, axs = plt.subplots(1, 4, figsize=(7.6, 2.9), gridspec_kw={'width_ratios': [0.9, 1, 0.9, 1]}, sharex='col')
 
     # 定义柱状图的区间边界
     bins = [0, 1024, 2048, 4096, 8192, 16384, 10000000000]
@@ -49,6 +49,10 @@ def draw_sample_simulation(datasets, labels, global_batch_size=None, global_toke
                 batch_data = next(train_data_iter)
             except StopIteration:
                 break
+            if i < 40:
+                continue
+            if i >= 60:
+                continue
             batch_data_list.append(batch_data)
             batch_array = np.array(batch_data)
             # 计算每个序列的长度，假设pad_id是用来填充的标记
@@ -58,7 +62,7 @@ def draw_sample_simulation(datasets, labels, global_batch_size=None, global_toke
             # 记录当前batch的所有序列长度
             all_seqlen_list.extend(batch_seqlen)
             # 为每个序列分配相同的批次索引
-            batch_indices.extend([i] * len(batch_data))
+            batch_indices.extend([i-40] * len(batch_data))
         
         # 绘制最大序列长度的折线图
         # axs[2*idx].plot(range(len(max_seqlen_list)), max_seqlen_list, label=f'Max Sequence Length', color='#1f77b4', marker='o', markersize=4, linestyle='--', linewidth=2)
@@ -84,6 +88,13 @@ def draw_sample_simulation(datasets, labels, global_batch_size=None, global_toke
         # 绘制直方图
         axs[2*idx + 1].bar(range(len(bin_labels)), hist, color='gray', alpha=0.6, width=0.6)
         
+        # 在柱状图上方添加计数值
+        for j, count in enumerate(hist):
+            axs[2*idx + 1].text(j, count + 0.5, str(count), ha='center', va='bottom', fontweight='bold', fontsize=10)
+
+        # 设置柱状图的 ylim 以确保计数值能够显示
+        axs[2*idx + 1].set_ylim(0, max(hist) + 20)
+        
         # 设置柱状图的 X 轴范围和标签
         axs[2*idx + 1].set_xticks(range(len(bin_labels)))
         axs[2*idx + 1].set_title('Count', fontsize=12)
@@ -104,14 +115,14 @@ def draw_sample_simulation(datasets, labels, global_batch_size=None, global_toke
     handles, labels = axs[0].get_legend_handles_labels()
 
     # 添加全局图例，放在图的正下方
-    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.08), ncol=2, fontsize=12, fancybox=True)
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.09), ncol=2, fontsize=12, fancybox=True)
 
     # 调整子图布局
     plt.tight_layout()  
 
     # 保存并展示图像
-    plt.savefig(f"{simulation_file_path}.png", format="png", pad_inches=0.01, bbox_inches="tight")
-    plt.savefig(f"{simulation_file_path}.svg", format="svg", pad_inches=0.01, bbox_inches="tight")
+    plt.savefig(f"{simulation_file_path}_shrink.png", format="png", pad_inches=0.01, bbox_inches="tight")
+    plt.savefig(f"{simulation_file_path}_shrink.svg", format="svg", pad_inches=0.01, bbox_inches="tight")
     plt.show()
 
 if __name__ == '__main__':

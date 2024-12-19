@@ -11,9 +11,10 @@ from tqdm import tqdm
 from data_utils import LLaMAJsonDataset
 
 dataset = "commoncrawl"
-dataset = "github"
-dataset = "code"
-counter_file_path = f"./dataset_analysis/{dataset}_counter.pkl"
+dataset = "web"
+# dataset = "github"
+# dataset = "code"
+counter_file_path = f"./dataset_analysis/64k_{dataset}_counter.pkl"
 cdf_file_path = f"./dataset_analysis/{dataset}_cdf.png"
 max_counter_file_path = f"./dataset_analysis/{dataset}_max_counter.pkl"
 max_cdf_file_path = f"./dataset_analysis/{dataset}_max_cdf.png"
@@ -134,10 +135,10 @@ def draw_sample_simulation(dataset, batch_size=64):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--max_seq_len", type=int, default=32768, help="maximum sequence len"
+        "--max_seq_len", type=int, default=65536, help="maximum sequence len"
     )
     parser.add_argument(
-        "--json_file", type=str, default=f"data/{dataset}/code.json", help='data json format file path'
+        "--json_file", type=str, default=f"data/{dataset}/combined_data.json", help='data json format file path'
     )
     parser.add_argument(
         "--json_key", type=str, default="content", help='json key for tokens'
@@ -157,6 +158,6 @@ if __name__ == '__main__':
         merge_file=args.merge_file
     )
     scan_and_dump(dataset)
-    scan_and_dump_max_seqlen(dataset)
+    # scan_and_dump_max_seqlen(dataset)
     # read_counter()
     # draw_sample_simulation(dataset)

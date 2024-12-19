@@ -1,6 +1,6 @@
 import json
 
-json_path = "strategy_pool.json"
+json_path = "strategy_pool_7b.json"
 
 def generate_json(data):
     with open(json_path, 'w') as f:
@@ -24,10 +24,10 @@ if __name__ == '__main__':
     memory_A = {'tp1': 38, 'tp2': 39, 'tp4': 42, 'tp8': 48}
     memory_B = 197
     memory_alpha = 0.75
-    memory_gap = {'gpu1': 1755 * (1024 ** 2), 'gpu2': 4831 * (1024 ** 2), 'gpu4': 7299 * (1024 ** 2), 'node': 12281 * (1024 ** 2)}
+    memory_gap = {'gpu1': 5000 * (1024 ** 2), 'gpu2': 5000 * (1024 ** 2), 'gpu4': 5000 * (1024 ** 2), 'node': 5000 * (1024 ** 2)}
     memory_safe_bound = 2 * (1024 ** 3)
     gpus_per_node = 8
-    gpu_memory_bound = (40536) * (1024 ** 2)
+    gpu_memory_bound = (81252) * (1024 ** 2)
     hetero_dp_comm_cost = 300 # ms
     # 生成json
     strategy_list = []

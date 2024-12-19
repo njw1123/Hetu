@@ -76,21 +76,42 @@ def convert_strategy(tp_pp_list, ngpus, layers):
                 used_gpus.items(), 
                 key=lambda x: -x[1], 
             )
-            for node_id, node_used_gpus in used_gpus_declined_order:
-                if node_used_gpus + tp <= GPUS_PER_NODE:
-                    # 分配这tp个GPU的GPUPos
-                    cur_gpus = range(node_id * GPUS_PER_NODE + node_used_gpus, node_id * GPUS_PER_NODE + node_used_gpus + tp)
-                    cur_layers = range(layers // pp * stage_id, layers // pp * (stage_id + 1))
+            if tp > GPUS_PER_NODE:
+                assert tp % GPUS_PER_NODE == 0, "tp larger than node gpus num should be divided by it"
+                rest_tp = tp
+                acc_cur_gpus = []
+                for node_id, node_used_gpus in used_gpus_declined_order:  
+                    if node_used_gpus != 0:
+                        continue
+                    cur_gpus = range(node_id * GPUS_PER_NODE, (node_id + 1) * GPUS_PER_NODE)
                     for gpu in cur_gpus:
                         gpu_pos[gpu] = GPUPos(dp_id, stage_id)
-                    for layer in cur_layers:
-                        layers_tp_groups[layer].append(list(cur_gpus))
-                    used_gpus[node_id] += tp
-                    stage_id += 1
-                    if stage_id == pp:
+                    acc_cur_gpus.extend(list(cur_gpus))
+                    used_gpus[node_id] += GPUS_PER_NODE
+                    rest_tp -= GPUS_PER_NODE
+                    if rest_tp == 0:
                         break
-            if stage_id == pp:
-                break
+                assert rest_tp == 0, f"cannot place tp {tp}"
+                cur_layers = range(layers // pp * stage_id, layers // pp * (stage_id + 1))
+                for layer in cur_layers:
+                    layers_tp_groups[layer].append(acc_cur_gpus)
+                stage_id += 1
+            else:        
+                for node_id, node_used_gpus in used_gpus_declined_order:     
+                    if node_used_gpus + tp <= GPUS_PER_NODE:
+                        # 分配这tp个GPU的GPUPos
+                        cur_gpus = range(node_id * GPUS_PER_NODE + node_used_gpus, node_id * GPUS_PER_NODE + node_used_gpus + tp)
+                        cur_layers = range(layers // pp * stage_id, layers // pp * (stage_id + 1))
+                        for gpu in cur_gpus:
+                            gpu_pos[gpu] = GPUPos(dp_id, stage_id)
+                        for layer in cur_layers:
+                            layers_tp_groups[layer].append(list(cur_gpus))
+                        used_gpus[node_id] += tp
+                        stage_id += 1
+                        if stage_id == pp:
+                            break
+                if stage_id == pp:
+                    break
         assert stage_id == pp, f"current tp_pp_list {tp_pp_list} can't guarantee that tp GPUs are all in the same node"
     for layer_tp_groups in layers_tp_groups:
         assert len(layer_tp_groups) == dp, "length of tp group list should all be equal to dp degree"

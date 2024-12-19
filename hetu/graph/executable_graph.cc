@@ -1915,7 +1915,8 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
         }
       }    
       // 有该param对应的local transfer param
-      if (transfer_topo.size() >= 1 && transfer_topo.back().get()->num_outputs() >= 1) {
+      if (transfer_topo.size() >= 1 && transfer_topo.back().get()->num_outputs() >= 1 
+          && transfer_topo.back().get()->output(0)->num_consumers() >= 1) {
         auto& final_transfer = transfer_topo.back().get()->output(0);
         auto transfer_it = _transfer_map.find(param->id());
         HT_ASSERT(transfer_it != _transfer_map.end())
@@ -1944,7 +1945,8 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
       }
       // HT_LOG_INFO << param << " substitute final transfer done";
       // 有该param对应的local grad
-      if (update_topo.size() >= 1 && update_topo.back().get()->num_outputs() >= 1) {
+      if (update_topo.size() >= 1 && update_topo.back().get()->num_outputs() >= 1
+          && update_topo.back().get()->output(0)->num_consumers() >= 1) {
         HT_ASSERT(is_optimizer_update_op(update_topo.back()))
           << "subgraph " << _compute_optimize_bridge_subgraph_map[param->producer()->id()]->global_name() << " last op must be an optimizer op";
         auto& final_grad = update_topo.back().get()->input(1);

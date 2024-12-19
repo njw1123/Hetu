@@ -2,11 +2,11 @@ import torch
 import numpy as np
 from typing import List
 
-def truncate_fn(batch: List[List[int]], pad_id: int, global_token_num: int):
-    valid_token_num = sum([np.sum(np.array(seq) != pad_id) for seq in batch])
-    last_seq_valid_token = np.sum(np.array(batch[-1]) != pad_id)
+def truncate_fn(batch: List[np.ndarray], pad_id: int, global_token_num: int):
+    valid_token_num = sum([np.sum(seq != pad_id) for seq in batch])
+    last_seq_valid_token = np.sum(batch[-1] != pad_id)
     assert valid_token_num >= global_token_num and valid_token_num - global_token_num < last_seq_valid_token, "cannot truncate the last seq"
-    batch[-1][last_seq_valid_token - (valid_token_num - global_token_num):] = [pad_id] * (len(batch[-1]) - last_seq_valid_token + (valid_token_num - global_token_num))
+    batch[-1][last_seq_valid_token - (valid_token_num - global_token_num):] = pad_id
     return batch
 
 def build_data_loader(dataset, consumed_samples, global_batch_size=None, global_token_num=None):

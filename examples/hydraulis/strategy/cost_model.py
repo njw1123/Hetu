@@ -37,6 +37,7 @@ def static_strategy_time_cost(data, counter, strategy_id, s_begin, s_end, S_STEP
             if s in counter:
                 # 1F1B
                 span_sum_time += quadratic_predict(s, strategy['a'], strategy['b'], strategy['c']) * counter[s]
+                # span_sum_time += quadratic_predict(s, strategy['a'], strategy['b'], 0) * counter[s]
                 span_max_seq_len = s
         cache[cache_key] = (span_sum_time, span_max_seq_len)
         sum_time += span_sum_time

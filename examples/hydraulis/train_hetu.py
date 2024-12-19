@@ -240,6 +240,7 @@ def pretrain(args):
         return results
 
     def run_plan(
+        compute_only = 0,
         epoch = 0,
         consumed_samples = 0,
         compute_strategy_id_list = [0,],
@@ -265,7 +266,7 @@ def pretrain(args):
             for compute_strategy_id in compute_strategy_id_list:
                 print(f"{local_device}: warm up for compute strategy {compute_strategy_id} begin...")
                 dp_size, tp_pp_list, max_seqlen_list, dp_id, stage_id = get_strategy_info(compute_strategy_id)
-                num_micro_batches = 8
+                num_micro_batches = max([pp for (tp, pp) in tp_pp_list])
                 # packing
                 if batching_method == 4:
                     max_seqlen = max_seqlen_list[dp_id]
@@ -285,7 +286,7 @@ def pretrain(args):
                 }
                 for i in range(config.n_layer):
                     feed_dict[config.cu_seqlens_list[i]] = packed_cu_seqlens_list
-                hetu_train(feed_dict, num_micro_batches, compute_strategy_id, optimize_strategy_id, run_level=ht.run_level("topo"))
+                hetu_train(feed_dict, num_micro_batches, compute_strategy_id, optimize_strategy_id, run_level=ht.run_level("compute_only") if compute_only else ht.run_level("update"))
                 print(f"{local_device}: warm up end")
             return
         
@@ -301,13 +302,16 @@ def pretrain(args):
         optimal_compute_strategy_id = compute_strategy_id_list[0]
         dp_size, tp_pp_list, max_seqlen_list, dp_id, stage_id = get_strategy_info(compute_strategy_id_list[0])
             
-        for step in range(args.steps):
+        for _ in range(args.begin_step):
+            next(train_iter)    
+        for step in range(args.begin_step, args.steps):
             # load data for each dp
             input_batch, label_batch, cu_seqlens_list = None, None, None
             if len(fake_seqlens) > 0:
                 sorted_batch, sorted_len = build_fake_batch_and_len(fake_seqlens, train_dataset.pad_id())
             else:
                 global_batch = np.array(next(train_iter))
+                # print("global batch shape is", global_batch.shape)
                 sorted_batch, sorted_len = get_sorted_batch_and_len(global_batch, train_dataset.pad_id())
             print(f"{local_device}: {len(sorted_batch)} seqs sorted lens is {sorted_len}")
             
@@ -323,7 +327,7 @@ def pretrain(args):
                     optimal_compute_strategy_id, estimated_cost_1, batch_indices, estimated_cost_2, batching_option_matrix = find_optimal_strategy(
                         compute_strategy_id_list, multi_dp_size, multi_tp_pp_list, multi_max_seqlen_list, 
                         multi_match_id_list, multi_gpu_pos, multi_dp_representive_gpu, 
-                        all_devices, local_device, batching_method, strategy_pool, sorted_len
+                        all_devices.get_index(local_device), batching_method, strategy_pool, sorted_len
                     )
                     dp_size, tp_pp_list, max_seqlen_list, dp_id, stage_id = get_strategy_info(optimal_compute_strategy_id)
                 # Question: 每个micro batch的实际的max_seqlen都不一样
@@ -336,7 +340,8 @@ def pretrain(args):
                 if batching_method == 2 or batching_method == 3:
                     assert max_padded_seqlen, "static-shape packing should provide the max seqlen after packing"
                     strategy_max_seqlen = max_padded_seqlen
-                    static_shape = True
+                    if batching_method == 2:
+                        static_shape = True
                 input_bucket, label_bucket = get_input_and_label_buckets(sorted_batch, train_dataset.pad_id(), batch_indices, strategy_max_seqlen, alignment)
                 input_bucket.pack_data(batching_option_matrix, static_shape)
                 label_bucket.pack_data(batching_option_matrix, static_shape)
@@ -374,10 +379,10 @@ def pretrain(args):
             start_time = time.time()
             if args.torch_profile != 0 and step == 0:
                 with profile(activities=[ProfilerActivity.CUDA]) as prof:
-                    results = hetu_train(feed_dict, len(input_batch), optimal_compute_strategy_id, optimize_strategy_id)
+                    results = hetu_train(feed_dict, len(input_batch), optimal_compute_strategy_id, optimize_strategy_id, run_level=ht.run_level("compute_only") if compute_only else ht.run_level("update"))
                 prof.export_chrome_trace(f"trace/trace_{local_device}.json")
             else:
-                results = hetu_train(feed_dict, len(input_batch), optimal_compute_strategy_id, optimize_strategy_id)
+                results = hetu_train(feed_dict, len(input_batch), optimal_compute_strategy_id, optimize_strategy_id, run_level=ht.run_level("compute_only") if compute_only else ht.run_level("update"))
             end_time = time.time()
             
             consumed_samples += len(sorted_batch)
@@ -396,6 +401,7 @@ def pretrain(args):
     ): 
         if warm_up:
             run_plan(
+                compute_only=args.compute_only,
                 warm_up=True, 
                 batching_method=args.batching_method,
                 max_padded_seqlen=args.max_seq_len,
@@ -405,6 +411,7 @@ def pretrain(args):
         for epoch in range(args.epochs):
             consumed_samples = 0 # should be reset when run next epoch
             consumed_samples = run_plan(
+                compute_only=args.compute_only,
                 epoch=epoch, 
                 consumed_samples=consumed_samples,
                 compute_strategy_id_list=compute_strategy_id_list,
@@ -416,7 +423,7 @@ def pretrain(args):
     
     compute_strategy_id_list = list(range(len(args.multi_tp_pp_list)))
     optimize_strategy_id = 0
-    test(compute_strategy_id_list=compute_strategy_id_list, optimize_strategy_id=optimize_strategy_id, warm_up=False)
+    test(compute_strategy_id_list=compute_strategy_id_list, optimize_strategy_id=optimize_strategy_id, warm_up=args.warm_up)
 
 if __name__ == '__main__':
     print("Run hetu training")
@@ -426,6 +433,12 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         "--torch_profile", type=int, default=0, help="use pytorch profiler"
+    )
+    parser.add_argument(
+        "--compute_only", type=int, default=0, help="use compute only"
+    )
+    parser.add_argument(
+        "--warm_up", type=int, default=0, help="use warm up"
     )
     parser.add_argument(
         "--batching_method", type=int, default=4, help="batching method"
@@ -477,6 +490,9 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         "--steps", type=int, default=20, help="number of steps for each epoch",
+    )
+    parser.add_argument(
+        "--begin_step", type=int, default=0, help="number of step to begin",
     )
     parser.add_argument(
         "--lr", type=float, default=1e-5, help="learning rate of adam"

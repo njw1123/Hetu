@@ -25,6 +25,7 @@ examples/hydraulis/data/
 examples/hydraulis/*.pkl
 examples/hydraulis/func_call/
 examples/hydraulis/dataset_analysis/
+examples/hydraulis/results
 
 # Python
 *.png

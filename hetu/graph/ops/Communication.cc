@@ -75,11 +75,12 @@ CommOpInfo CommOpImpl::get_comm_info(Operator& op, const Device& inferred) const
   }
   // 一对多和多对一目前会在hetero dim上将二者尝试对齐
   // 其解决的主要是不同tp组间的activation通信
+  // workaround: hydraulis的bridge-graph并不适用
   if (src_ds_union.is_hetero() && !dst_ds_union.is_hetero()) {
-    dst_ds_union = dst_ds_union.to_hetero(src_ds_union.hetero_dim(), src_ds_union.size());
+    // dst_ds_union = dst_ds_union.to_hetero(src_ds_union.hetero_dim(), src_ds_union.size());
   } 
   else if (!src_ds_union.is_hetero() && dst_ds_union.is_hetero()) {
-    src_ds_union = src_ds_union.to_hetero(dst_ds_union.hetero_dim(), dst_ds_union.size());
+    // src_ds_union = src_ds_union.to_hetero(dst_ds_union.hetero_dim(), dst_ds_union.size());
   } 
   // 多对多情形
   // hetero dim可以不同
