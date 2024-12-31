@@ -53,6 +53,9 @@ class Bucket:
                 if cur_cu_seqlen % self._alignment != 0:
                     pad_seqlen = self._alignment - (cur_cu_seqlen % self._alignment) 
                     packed_seqs.append(np.array([self._pad_token] * pad_seqlen))
+                    # padding tokens也加入cu seqlens中
+                    cur_cu_seqlen += pad_seqlen
+                    cu_seqlens.append(cur_cu_seqlen)
                 packed_batch.append(np.concatenate(packed_seqs))
                 packed_cu_seqlens_list.append(np.array(cu_seqlens, dtype=np.int32))   
         # 简单的贪心packing策略

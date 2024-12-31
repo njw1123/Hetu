@@ -370,7 +370,13 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
       CUR_STRATEGY_ID = COMPUTE_STRATEGY_ID;
       exec_graph_plan.exec_graph->CUR_STRATEGY_ID = COMPUTE_STRATEGY_ID;
     }
-    HTShapeList exec_output_shapes = exec_op->InferShape(input_shapes, runtime_ctx);
+    HTShapeList exec_output_shapes;
+    try {
+      exec_output_shapes = exec_op->InferShape(input_shapes, runtime_ctx);
+    } catch (const std::exception& e) {
+      HT_RUNTIME_ERROR << "During deducing shape of exec op " << exec_op << " with inputs " << exec_op->inputs()
+        << " and shapes " << input_shapes << ", an error occurs: " << e.what();
+    }
     // HT_LOG_INFO << exec_op << " input shapes are " << input_shapes << " and output shapes are " << exec_output_shapes;
     auto exec_output_shapes_size = exec_output_shapes.size();
     for (size_t i = 0; i < exec_output_shapes_size; i++) {
@@ -421,7 +427,13 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
         << " from the current exec shape plan!";
       exec_input_shapes.push_back(it->second);
     }
-    HTShapeList exec_output_shapes = exec_op->InferShape(exec_input_shapes, runtime_ctx);
+    HTShapeList exec_output_shapes;
+    try {
+      exec_output_shapes = exec_op->InferShape(exec_input_shapes, runtime_ctx);
+    } catch (const std::exception& e) {
+      HT_RUNTIME_ERROR << "During deducing shape of additional exec op " << exec_op << " with inputs " << exec_op->inputs()
+        << " and shapes " << exec_input_shapes << ", an error occurs: " << e.what();
+    }
     // HT_LOG_INFO << "extra exec op " << exec_op << " output shapes are " << exec_output_shapes;
     /*
     if (is_batched_isend_irecv_op(exec_op) && exec_op->num_inputs() == 0) {
@@ -978,10 +990,21 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
       << ", exec inputs are " << exec_inputs
       << ", exec input shapes are " << exec_input_shapes;
     */
-    auto& exec_op = Graph::MakeOp(
-      op->_body, std::move(exec_inputs),
-      OpMeta().set(op->op_meta()).set_is_deduce_states(false).set_extra_deps(std::move(exec_in_deps)),
-      *exec_graph);
+
+    Operator exec_op;
+    try {
+      exec_op = Graph::MakeOp(op->_body, exec_inputs,
+        OpMeta().set(op->op_meta()).set_is_deduce_states(false).set_extra_deps(std::move(exec_in_deps)), *exec_graph);
+    } catch (const std::exception& e) {
+      HTShapeList exec_input_shapes;
+      exec_input_shapes.reserve(exec_inputs.size());
+      for (const auto& exec_input : exec_inputs) {
+        exec_input_shapes.emplace_back(exec_input->shape());
+      }
+      HT_RUNTIME_ERROR << "During instantiating exec op " << op << " with inputs " << exec_inputs
+        << " and shapes " << exec_input_shapes << ", an error occurs: " << e.what();
+    }
+        
     if (is_comm_op(op) || is_parallel_attn_op(op)) {
       /*
       HT_LOG_WARN << exec_op << " output shape is " << exec_op->output(0)->shape()
@@ -1175,17 +1198,6 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
     // HT_LOG_INFO << i << "\n" << fetches << "\n" << exec_graph_plan.fetches
     // << " " << exec_graph_plan.global_topo.size();
     for (const auto& fetch : fetches) {
-      bool find_fetch = false;
-      for (auto it = exec_graph_plan.fetches.begin(); it != exec_graph_plan.fetches.end(); ++it) {
-        if ((*it)->id() == fetch->id()) {
-          find_fetch = true;
-          break;
-        }
-      }
-      if (find_fetch == false) {
-        exec_plan_matched = false;
-        break;
-      }
       if (std::find(exec_graph_plan.fetches.begin(), exec_graph_plan.fetches.end(), fetch) == exec_graph_plan.fetches.end()) {
         HT_LOG_TRACE << local_device << ": exec_graph_plan fetches are " << exec_graph_plan.fetches 
           << " and the mismatch fetch is " << fetch;
@@ -1221,8 +1233,8 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
     // Instantiate会将新的exec_graph_plan加入pool中
     int32_t pipeline_num = 0;
     if (!loss->cur_ds_union().is_hetero()) {
-      pipeline_num = loss->cur_ds_union().get(0).states(0);
-    } else if (loss->cur_ds_union().hetero_dim() == 0) {
+      pipeline_num = loss->cur_ds_union().get(0).states(-2);
+    } else if (loss->cur_ds_union().hetero_dim() == -2) {
       pipeline_num = loss->cur_ds_union().size();
     } else {
       HT_RUNTIME_ERROR << "Currently we use the ds of loss to deduce pipeline num"

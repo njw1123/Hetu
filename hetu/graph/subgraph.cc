@@ -241,8 +241,10 @@ void SubGraph::run(Tensor2NDArrayMap& tensor2data, const Tensor2NDArrayMap& pres
   // 跑完之后就删除来清空NDArray的引用计数
   // 否则mempool将一直无法回收这些显存
   // 直到runtime_ctx析构为止
-  for (const auto& tensor_id : alloc_concat_tensor_id_list) {
-    runtime_ctx.delete_runtime_allocation(tensor_id);
+  if (use_concat_memory_optimization) {
+    for (const auto& tensor_id : alloc_concat_tensor_id_list) {
+      runtime_ctx.delete_runtime_allocation(tensor_id);
+    }
   }
 }
 

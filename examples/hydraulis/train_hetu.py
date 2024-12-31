@@ -11,12 +11,13 @@ import hetu as ht
 from torch.profiler import profile, ProfilerActivity
 from hetu_llama import LLamaLMHeadModel
 from llama_config import LLaMAConfig
-from data_utils import LLaMAJsonDataset, build_data_loader, get_sorted_batch_and_len, build_fake_batch_and_len, get_input_and_label_buckets
+from data_utils import LLaMAJsonDataset, build_data_loader, get_sorted_batch_and_len, build_fake_batch_and_len, get_input_and_label_buckets, LLaMaDatasetConfig, build_tokenizer, BlendedHetuDatasetBuilder
 from parallel_utils import read_ds_parallel_config, parse_multi_ds_parallel_config, convert_strategy, generate_ds_parallel_config
 from strategy import get_strategy_max_seqlen, find_optimal_strategy
 
 local_device = None
 all_devices = None
+tokenizer = None
 ds_parallel_config_path = "./ds_parallel_config/"
 alignment = 128
 
@@ -35,19 +36,37 @@ def distributed_init(args):
         print(f'local_device: {local_device}, all_devices: {all_devices}')
 
 def train_dataset_provider(args):
-    train_dataset = LLaMAJsonDataset(
-        json_file=args.json_file,
-        key=args.json_key,
-        max_seq_len=args.max_seq_len,
-        vocab_file=args.vocab_file,
-        merge_file=args.merge_file
+    global tokenizer
+    args.make_vocab_size_divisible_by = 128
+    tokenizer = build_tokenizer(args)
+    config = LLaMaDatasetConfig(
+        random_seed=args.seed,
+        sequence_length=args.max_seq_len,
+        blend=args.data_path,
+        blend_per_split=[None, None, None],
+        split=args.split,
+        path_to_cache=args.data_cache_path,
+        tokenizer=tokenizer,
+        reset_position_ids=False,
+        reset_attention_mask=False,
+        eod_mask_loss=False,
+        vocab_size=args.vocab_size,
     )
-    return train_dataset
+    samples_per_step = args.global_batch_size
+    # workaround for fixed token num sampler
+    if samples_per_step == -1:
+        samples_per_step = args.global_token_num // args.max_seq_len
+    train_val_test_num_samples = [args.epochs * args.steps * samples_per_step, 0, 0]
+    train_ds, valid_ds, test_ds = BlendedHetuDatasetBuilder(
+        LLaMAJsonDataset,
+        train_val_test_num_samples,
+        config
+    ).build()
+    return train_ds
 
-def train_data_iterator(dataset, consumed_samples, global_batch_size=None, global_token_num=None):
-    dataloader = build_data_loader(dataset, consumed_samples, global_batch_size=global_batch_size, global_token_num=global_token_num)
-    train_data_iter = iter(dataloader)
-    return train_data_iter
+def train_dataloader_provider(train_ds, tokenizer, consumed_samples, global_batch_size=None, global_token_num=None):
+    data_loader = build_data_loader(train_ds, tokenizer, consumed_samples, global_batch_size=global_batch_size, global_token_num=global_token_num)
+    return iter(data_loader)
   
 def get_dg_from_union(device, dg_union):
     for i, dg in enumerate(dg_union):
@@ -128,12 +147,12 @@ def pretrain(args):
         use_flash_attn=args.use_flash_attn
     )
     assert config.use_flash_attn == True, "symbolic shape can only used when flash attn is on for now"
-    # Simple check for gpt blocks range
+    # Simple check for llama blocks range
     ranges = []
-    for _, block_config in ds_parallel_configs[0]['gpt']['blocks'].items():
+    for _, block_config in ds_parallel_configs[0]['llama']['blocks'].items():
         ranges.append(block_config['range'])
     assert ranges[0][0] == 0 and ranges[-1][-1] == config.num_hidden_layers - 1, \
-        f'gpt blocks range: {ranges} is conflict with num_hidden_layers: {config.num_hidden_layers}!'
+        f'llama blocks range: {ranges} is conflict with num_hidden_layers: {config.num_hidden_layers}!'
 
     # Hetu model definition
     model = LLamaLMHeadModel(config=config, ds_parallel_configs=ds_parallel_configs)
@@ -141,12 +160,13 @@ def pretrain(args):
     input_ds_hierarchy, input_dg_hierarchy = parse_multi_ds_parallel_config(ds_parallel_configs, 'input')
     label_ds_hierarchy, label_dg_hierarchy = parse_multi_ds_parallel_config(ds_parallel_configs, 'label')
     # todo: remove the global_shape
-    # now just offer a shape that can be divided by dp size
-    input_ids = ht.parallel_placeholder(ht.int64, global_shape=[multi_dp_size[0]], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='input_ids')
-    # position_ids = ht.parallel_placeholder(ht.int64, global_shape=[multi_dp_size[0]], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='position_ids')
-    # token_type_ids = ht.parallel_placeholder(ht.int64, global_shape=[multi_dp_size[0]], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='token_type_ids')
-    # attention_mask = ht.parallel_placeholder(ht.float32, global_shape=[multi_dp_size[0]], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='attention_mask')
-    masked_lm_labels = ht.parallel_placeholder(ht.int64, global_shape=[multi_dp_size[0]], ds_hierarchy=label_ds_hierarchy, device_group_hierarchy=label_dg_hierarchy, name='masked_lm_labels')
+    # now just offer a shape that can be divided by dp * tp_max size
+    input_ids = ht.parallel_placeholder(ht.int64, global_shape=[multi_dp_size[0] * 16], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='input_ids')
+    # position_ids = ht.parallel_placeholder(ht.int64, global_shape=[multi_dp_size[0] * 16], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='position_ids')
+    # token_type_ids = ht.parallel_placeholder(ht.int64, global_shape=[multi_dp_size[0] * 16], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='token_type_ids')
+    # attention_mask = ht.parallel_placeholder(ht.float32, global_shape=[multi_dp_size[0] * 16], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='attention_mask')
+    loss_mask =  ht.parallel_placeholder(ht.float32, global_shape=[multi_dp_size[0] * 16], ds_hierarchy=label_ds_hierarchy, device_group_hierarchy=label_dg_hierarchy, name='loss_mask')
+    masked_lm_labels = ht.parallel_placeholder(ht.int64, global_shape=[multi_dp_size[0] * 16], ds_hierarchy=label_ds_hierarchy, device_group_hierarchy=label_dg_hierarchy, name='masked_lm_labels')
     config.cu_seqlens_list = []
     for block_id, block in enumerate(model.transformer.h):
         config.cu_seqlens_list.append(
@@ -182,14 +202,14 @@ def pretrain(args):
         input_ids=input_ids,
         # position_ids=position_ids,
         # attention_mask=attention_mask,
+        loss_mask=loss_mask,
         # token_type_ids=token_type_ids,
         labels=masked_lm_labels
     )
     print(f'{local_device}: build model end...')
 
     print(f'{local_device}: optimizer minimize begin...')
-    # opt = ht.SGDOptimizer(lr=args.lr, momentum = 0.0)
-    opt = ht.AdamOptimizer(lr=args.lr)
+    opt = ht.AdamOptimizer(init_lr=args.lr, max_lr=args.lr, min_lr=args.lr, lr_warmup_steps=0, lr_decay_steps=1000, lr_decay_style="constant")
     train_op = opt.minimize(loss)
     print(f'{local_device}: optimizer minimize end...')
     
@@ -281,9 +301,11 @@ def pretrain(args):
                 packed_cu_seqlens_list = [np.array([0, max_seqlen], dtype=np.int32)] * num_micro_batches
                 input_list = [np.zeros((max_seqlen,), dtype=np.int64)] * num_micro_batches
                 label_list = [np.zeros((max_seqlen,), dtype=np.int64)] * num_micro_batches
+                loss_mask_list = [np.zeros((max_seqlen,), dtype=np.float32)] * num_micro_batches
                 feed_dict = {
                     input_ids: input_list,
-                    masked_lm_labels: label_list
+                    masked_lm_labels: label_list,
+                    loss_mask: loss_mask_list
                 }
                 for i in range(config.n_layer):
                     feed_dict[config.cu_seqlens_list[i]] = packed_cu_seqlens_list
@@ -295,9 +317,9 @@ def pretrain(args):
         assert (args.global_batch_size == -1 and args.global_token_num != -1) \
             or (args.global_batch_size != -1 and args.global_token_num == -1), "should only use one of the args: global_batch_size & global_token_num"
         if args.global_batch_size != -1:
-            train_iter = train_data_iterator(train_dataset, consumed_samples, global_batch_size=args.global_batch_size)
+            train_iter = train_dataloader_provider(train_dataset, tokenizer, consumed_samples, global_batch_size=args.global_batch_size)
         if args.global_token_num != -1:
-            train_iter = train_data_iterator(train_dataset, consumed_samples, global_token_num=args.global_token_num)
+            train_iter = train_dataloader_provider(train_dataset, tokenizer, consumed_samples, global_token_num=args.global_token_num)
         
         # 默认用compute_strategy_id_list中的第一项
         optimal_compute_strategy_id = compute_strategy_id_list[0]
@@ -309,11 +331,11 @@ def pretrain(args):
             # load data for each dp
             input_batch, label_batch, cu_seqlens_list = None, None, None
             if len(fake_seqlens) > 0:
-                sorted_batch, sorted_len = build_fake_batch_and_len(fake_seqlens, train_dataset.pad_id())
+                sorted_batch, sorted_len = build_fake_batch_and_len(fake_seqlens, tokenizer.pad)
             else:
                 global_batch = np.array(next(train_iter))
                 # print("global batch shape is", global_batch.shape)
-                sorted_batch, sorted_len = get_sorted_batch_and_len(global_batch, train_dataset.pad_id())
+                sorted_batch, sorted_len = get_sorted_batch_and_len(global_batch, tokenizer.pad)
             print(f"{local_device}: {len(sorted_batch)} seqs sorted lens is {sorted_len}")
             
             # packing
@@ -343,7 +365,7 @@ def pretrain(args):
                     strategy_max_seqlen = max_padded_seqlen
                     if batching_method == 2:
                         static_shape = True
-                input_bucket, label_bucket = get_input_and_label_buckets(sorted_batch, train_dataset.pad_id(), batch_indices, strategy_max_seqlen, alignment)
+                input_bucket, label_bucket = get_input_and_label_buckets(sorted_batch, tokenizer.pad, batch_indices, strategy_max_seqlen, alignment)
                 input_bucket.pack_data(batching_option_matrix, static_shape)
                 label_bucket.pack_data(batching_option_matrix, static_shape)
                 input_batch, label_batch = input_bucket.packed_batch(), label_bucket.packed_batch()
@@ -356,8 +378,8 @@ def pretrain(args):
                 batch_size_per_dp = args.global_batch_size // dp_size
                 batch_indices = list(range(batch_size_per_dp * dp_id, batch_size_per_dp * (dp_id + 1)))
                 assert max_padded_seqlen, "padding should provide the max seqlen after padding"
-                config.max_seqlen_symbol.set_data(max_padded_seqlen - 1) 
-                input_bucket, label_bucket = get_input_and_label_buckets(sorted_batch, train_dataset.pad_id(), batch_indices, max_padded_seqlen, alignment)
+                config.max_seqlen_symbol.set_data(max_padded_seqlen) 
+                input_bucket, label_bucket = get_input_and_label_buckets(sorted_batch, tokenizer.pad, batch_indices, max_padded_seqlen, alignment)
                 input_bucket.pad_data()
                 label_bucket.pad_data()
                 input_batch, label_batch = input_bucket.padded_batch(), label_bucket.padded_batch()
@@ -376,7 +398,14 @@ def pretrain(args):
                 }
                 for i in range(config.n_layer):
                     feed_dict[config.cu_seqlens_list[i]] = [x.astype(np.int32) for x in cu_seqlens_list]
-            
+                    # feed_dict[config.cu_seqlens_list[i]] = [np.array([0, max_padded_seqlen]).astype(np.int32) for x in cu_seqlens_list]
+                loss_mask_list = []
+                for idx, label in enumerate(label_list):
+                    micro_batch_loss_mask = np.zeros_like(label, dtype=np.float32)
+                    micro_batch_loss_mask[cu_seqlens_list[idx][0]:cu_seqlens_list[idx][-1]] = 1
+                    loss_mask_list.append(micro_batch_loss_mask)
+                feed_dict[loss_mask] = loss_mask_list
+
             start_time = time.time()
             if args.torch_profile != 0 and step == 0:
                 with profile(activities=[ProfilerActivity.CUDA]) as prof:
@@ -459,16 +488,22 @@ if __name__ == '__main__':
         "--max_seq_len", type=int, default=4096, help="maximum sequence length in the whole dataset"
     )
     parser.add_argument(
-        "--json_file", type=str, help='data json format file path'
+        "--data_path", type=str, nargs='+', help='The blend string, consisting of either a single dataset or a flattened sequential sequence of weight-dataset pairs'
     )
     parser.add_argument(
-        "--json_key", type=str, help='json key for tokens'
+        "--data_cache_path", type=str, help='Where all re-useable dataset indices are to be cached'
     )
     parser.add_argument(
-        "--vocab_file", type=str, help='gpt vocab file path'
+        "--tokenizer_type", type=str, help='tokenizer type'
     )
     parser.add_argument(
-        "--merge_file", type=str, help='gpt merge file path'
+        "--split", type=str, help='The split string, a comma separated weighting for the dataset splits when drawing samples from a single distribution'
+    )
+    parser.add_argument(
+        "--vocab_file", type=str, help='llama vocab file path'
+    )
+    parser.add_argument(
+        "--merge_file", type=str, help='llama merge file path'
     )
     parser.add_argument(
         "--vocab_size", type=int, default=30522, help="total number of vocab"
@@ -521,10 +556,14 @@ if __name__ == '__main__':
     parser.add_argument(
         "--ngpus", type=int, default=8, help="num of gpus"
     ) 
+    parser.add_argument(
+        "--seed", type=int, default=12345, help="random seed"
+    ) 
     args = parser.parse_args()
     print("Hetu distributed init")
     distributed_init(args)
     print("Local device world rank is", all_devices.get_index(local_device))
+    args.rank = all_devices.get_index(local_device)
     args.multi_tp_pp_list = ast.literal_eval(args.multi_tp_pp_list)
     assert len(args.multi_tp_pp_list) >= 1, "there should be at least one strategy"
     with ht.graph("define_and_run", num_strategy=len(args.multi_tp_pp_list)):

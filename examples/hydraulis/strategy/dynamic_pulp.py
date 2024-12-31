@@ -40,7 +40,7 @@ def process_trial(trial, batch_seqlen_array, strategy_pool, sorted_max_seqlen_li
         visited = set()
         for shuffled_seq_id, seqlen in enumerate(shuffled_batch_seqlen_array):
             # 判断是否只能放在dp_id=0的策略中
-            if sorted_max_seqlen_list[0] >= seqlen and sorted_max_seqlen_list[1] < seqlen:
+            if len(sorted_max_seqlen_list) == 1 or (sorted_max_seqlen_list[0] >= seqlen and sorted_max_seqlen_list[1] < seqlen):
                 strategy_id = sorted_strategy_id_list[0]
                 cost = cached_dynamic_strategy_time_cost(strategy_id, seqlen)
                 accumulate_cost[0] += cost

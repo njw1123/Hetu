@@ -5,17 +5,17 @@ FFN_HIDDEN_SIZE=${3:-11008}
 # FFN_HIDDEN_SIZE=${3:-2560}
 NUM_HEADS=${4:-32}
 GLOBAL_BATCH_SIZE=-1 # 目前改用gtb代替gbs
-GLOBAL_TOKEN_NUM=${5:-100000}
-MAX_SEQ_LEN=${6:-8192}
-SERVER_ADDR=${7:-"172.24.10.109"} # master-0
-# SERVER_ADDR=${7:-"172.24.93.179"} # worker-0
+GLOBAL_TOKEN_NUM=${5:-10000}
+MAX_SEQ_LEN=${6:-2048}
+# SERVER_ADDR=${7:-"172.24.10.109"} # master-0
+SERVER_ADDR=${7:-"172.24.93.179"} # worker-0
 # SERVER_ADDR=${7:-"127.0.0.1"} # 216
 SERVER_PORT=${8:-"23333"}
-HOST_FILE_PATH=${9:-"./scripts/host.yaml"}
+HOST_FILE_PATH=${9:-"./scripts/host_single.yaml"}
 ENV_FILE_PATH=${10:-"./scripts/env_A100.sh"}
 STRATEGY_POOL_PATH=${11:-"./strategy/strategy_pool_7b_A100.json"}
 
-WARM_UP=1
+WARM_UP=0
 COMPUTE_ONLY=0
 TORCH_PROFILE=0
 CASE=0
@@ -23,6 +23,9 @@ if [[ ${CASE} -eq 0 ]]; then
 	# test
 	NUM_GPUS=16
 	MULTI_TP_PP_LIST="[[(4, 2), (4, 2)], [(4, 2), (1, 8)], [(4, 2), (1, 4), (1, 4)]]"
+	BATCHING_METHOD=4
+	NUM_GPUS=8
+	MULTI_TP_PP_LIST="[[(8, 1)], [(4, 1), (4, 1)]]"
 	BATCHING_METHOD=4
 elif [[ ${CASE} -eq 1 ]]; then
 	# homo + greedy packing with static shape
@@ -73,8 +76,8 @@ mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 
 ROOT_FOLDER=data
-JSON_FILE=${ROOT_FOLDER}/web/combined_data.json
-JSON_KEY=content
+DATA_CACHE_PATH=${ROOT_FOLDER}/web
+DATA_PATH=${ROOT_FOLDER}/web/web_content_document
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json
 MERGE_FILE=${ROOT_FOLDER}/merges.txt
 
@@ -89,8 +92,10 @@ CMD="python3 -u train_hetu.py \
 --global_token_num $GLOBAL_TOKEN_NUM \
 --max_seq_len $MAX_SEQ_LEN \
 --strategy_pool $STRATEGY_POOL_PATH \
---json_file $JSON_FILE \
---json_key $JSON_KEY \
+--data_path $DATA_PATH \
+--data_cache_path $DATA_CACHE_PATH \
+--tokenizer_type "GPT2BPETokenizer" \
+--split "98,1,1" \
 --vocab_file $VOCAB_FILE \
 --merge_file $MERGE_FILE \
 --vocab_size 50304 \

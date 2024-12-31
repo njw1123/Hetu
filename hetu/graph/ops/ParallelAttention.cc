@@ -980,9 +980,9 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
   HTShape q_begin_pos = {0, 0, 0, 0};
   HTShape k_begin_pos = {0, 0, q_num_heads, 0};
   HTShape v_begin_pos = {0, 0, q_num_heads + kv_num_heads, 0};
-  auto q = NDArray::slice(reshaped_qkv, q_begin_pos, q_shape, stream_idx);
-  auto k = NDArray::slice(reshaped_qkv, k_begin_pos, k_shape, stream_idx);
-  auto v = NDArray::slice(reshaped_qkv, v_begin_pos, v_shape, stream_idx);
+  auto q = NDArray::contiguous(NDArray::slice(reshaped_qkv, q_begin_pos, q_shape, stream_idx));
+  auto k = NDArray::contiguous(NDArray::slice(reshaped_qkv, k_begin_pos, k_shape, stream_idx));
+  auto v = NDArray::contiguous(NDArray::slice(reshaped_qkv, v_begin_pos, v_shape, stream_idx));
   // HT_LOG_DEBUG << "[ParallelAttn]: q shape is " << q->shape() << " and k (same as v) shape is " << k->shape();
   double softmax_scale_ = softmax_scale() >= 0 ? softmax_scale() : std::pow(_head_dim, -0.5);
   int64_t ring_idx;
@@ -1037,8 +1037,8 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
                                                    stream_idx);
       attn_ctx()->acc_out = reshaped_output;
       HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttn,
-                                   q, k, v, attn_ctx()->acc_out, empty_ndarray,
-                                   empty_ndarray, empty_ndarray, empty_ndarray, attn_ctx()->acc_softmax_lse,
+                                   q, k, v, attn_ctx()->acc_out, q,
+                                   k, v, attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse,
                                    empty_ndarray, attn_ctx()->rng_state_list.at(0), p_dropout(), softmax_scale_,
                                    true, return_softmax(), op->instantiation_ctx().stream());
     } else {
@@ -1059,8 +1059,8 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
                                                    stream_idx);
       attn_ctx()->acc_out = NDArray::view(reshaped_output, {batch_size_mul_seq_len, q_num_heads, _head_dim});
       HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttnVarlen, 
-                                   attn_ctx()->q, attn_ctx()->k, attn_ctx()->v, cu_seqlens_q, cu_seqlens_k, attn_ctx()->acc_out, empty_ndarray,
-                                   empty_ndarray, empty_ndarray, empty_ndarray, attn_ctx()->acc_softmax_lse,
+                                   attn_ctx()->q, attn_ctx()->k, attn_ctx()->v, cu_seqlens_q, cu_seqlens_k, attn_ctx()->acc_out, attn_ctx()->q,
+                                  attn_ctx()->k, attn_ctx()->v, attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse,
                                    empty_ndarray, attn_ctx()->rng_state_list.at(0), 
                                    max_seqlen_q(), max_seqlen_k(), 
                                    p_dropout(), softmax_scale_, false,
@@ -1249,17 +1249,24 @@ void ParallelAttentionGradientOpImpl::DoCompute(Operator& op, const NDArrayList&
         << "packing should have 3 inputs: grad_output, cu_seqlens_q and cu_seqlens_k";
       auto cu_seqlens_q = inputs.at(1);
       auto cu_seqlens_k = inputs.at(2);
-      dq = NDArray::view(dq, {batch_size_mul_seq_len, q_num_heads, _head_dim});
-      dk = NDArray::view(dk, {batch_size_mul_seq_len, kv_num_heads, _head_dim});
-      dv = NDArray::view(dv, {batch_size_mul_seq_len, kv_num_heads, _head_dim});
+      auto dq_new = NDArray::view(NDArray::contiguous(dq), {batch_size_mul_seq_len, q_num_heads, _head_dim});
+      auto dk_new = NDArray::view(NDArray::contiguous(dk), {batch_size_mul_seq_len, kv_num_heads, _head_dim});
+      auto dv_new = NDArray::view(NDArray::contiguous(dv), {batch_size_mul_seq_len, kv_num_heads, _head_dim});
       reshaped_grad_output = NDArray::view(reshaped_grad_output, {batch_size_mul_seq_len, q_num_heads, _head_dim});
       HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                    hetu::impl::FlashAttnVarlenGradient, reshaped_grad_output,
                                    attn_ctx()->q, attn_ctx()->k, attn_ctx()->v, cu_seqlens_q, cu_seqlens_k, 
                                    attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse, attn_ctx()->rng_state_list.at(0), 
-                                   dq, dk, dv, max_seqlen_q(), max_seqlen_k(), p_dropout(), softmax_scale_, false,
+                                   dq_new, dk_new, dv_new, max_seqlen_q(), max_seqlen_k(), p_dropout(), softmax_scale_, false,
                                    true, op->instantiation_ctx().stream());
+      dq_new = NDArray::view(dq_new, dq_shape);
+      dk_new = NDArray::view(dk_new, dk_shape);
+      dv_new = NDArray::view(dv_new, dv_shape);
+      NDArray::copy(dq_new, op->instantiation_ctx().stream().stream_index(), dq);
+      NDArray::copy(dk_new, op->instantiation_ctx().stream().stream_index(), dk);
+      NDArray::copy(dv_new, op->instantiation_ctx().stream().stream_index(), dv);
     }
+
   }
   // 清空该micro batch的ctx
   attn_ctx()->release();

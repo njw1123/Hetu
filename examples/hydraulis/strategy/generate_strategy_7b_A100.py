@@ -25,7 +25,7 @@ if __name__ == '__main__':
     memory_B = 197
     memory_alpha = 0.75
     memory_gap = {'gpu1': 1755 * (1024 ** 2), 'gpu2': 4831 * (1024 ** 2), 'gpu4': 7299 * (1024 ** 2), 'node': 12281 * (1024 ** 2)}
-    memory_safe_bound = 4 * (1024 ** 3)
+    memory_safe_bound = 6 * (1024 ** 3)
     gpus_per_node = 8
     gpu_memory_bound = (40536) * (1024 ** 2)
     hetero_dp_comm_cost = 300 # ms

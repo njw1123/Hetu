@@ -145,11 +145,11 @@ Tensor SGDOptimizer::ApplyDense(const GradAndVar& grad_and_var, const Tensor& in
                           .set_is_deduce_states(false);
   if (momentum() == 0) {
     if (infinite_count != Tensor())
-      return MakeSGDUpdateWithGradScalerOp(var, grad, infinite_count, learning_rate(), update_op_meta);
-    return MakeSGDUpdateOp(var, grad, learning_rate(), update_op_meta);
+      return MakeSGDUpdateWithGradScalerOp(var, grad, infinite_count, param_scheduler(), update_op_meta);
+    return MakeSGDUpdateOp(var, grad, param_scheduler(), update_op_meta);
   } else {
     return MakeMomentumUpdateOp(var, grad, MakeStates(var, grad, "velocity"),
-                                learning_rate(), momentum(), nesterov(),
+                                param_scheduler(), momentum(), nesterov(),
                                 update_op_meta);
   }
 }
@@ -176,10 +176,13 @@ Tensor AdamOptimizer::ApplyDense(const GradAndVar& grad_and_var, const Tensor& i
   }
   state_dict[var->id()]["step"] = step;
   // variable: dup in dp group, grad: reduce-scatter in dp group, mean & variance: same as grad
+
+
+
   return MakeAdamOp(var, grad, MakeStates(var, grad, "mean"),
                     MakeStates(var, grad, "variance"),
-                    learning_rate(), step, beta1(), beta2(),
-                    eps(), weight_decay(), update_op_meta);
+                    param_scheduler(), step, beta1(), beta2(),
+                    eps(), update_op_meta);
 }
 
 } // namespace graph

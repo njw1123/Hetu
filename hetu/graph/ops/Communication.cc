@@ -956,7 +956,6 @@ void BatchedISendIRecvOpImpl::DoCompute(Operator& op,
     return input->is_contiguous() ? input : NDArray::contiguous(input, op->instantiation_ctx().stream_index);
   });
 
-  return;
   HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), 
                                   hetu::impl::BatchedISendIRecv, contig_inputs, _dst_devices, outputs, 
                                   _src_devices, _comm_devices, op->instantiation_ctx().stream());

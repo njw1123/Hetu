@@ -117,7 +117,7 @@ def convert_strategy(tp_pp_list, ngpus, layers):
         assert len(layer_tp_groups) == dp, "length of tp group list should all be equal to dp degree"
     return layers_tp_groups, gpu_pos
 
-def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path, zero=True):
+def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path, zero=False):
     dp = len(layers_tp_groups[0])
     dp_union = [dp for _ in range(dp)]
     num_layers = len(layers_tp_groups)
@@ -135,7 +135,7 @@ def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path
             'device_group_union': dg_union_list[0],
             'type': 'placeholder'
         },
-        'gpt': {
+        'llama': {
             'wte': {
                 'split': {'0': tp_union_list[0]},
                 'dup': dp_union,
@@ -173,7 +173,7 @@ def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path
     }
     
     for block_id in range(num_layers):
-        blocks_json = ds_parallel_config['gpt']['blocks']
+        blocks_json = ds_parallel_config['llama']['blocks']
         blocks_json[f'blocks{block_id}'] = {
             'range': [block_id,],
             'recompute': [False for _ in range(dp)],
@@ -215,6 +215,8 @@ def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path
                     'dup': dp_union,
                     'device_group_union': dg_union_list[block_id],
                     'type': 'variable'
+                },
+                'activation_func': {
                 }
             }
         }

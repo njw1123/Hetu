@@ -540,29 +540,9 @@ class OpDef : public shared_ptr_target {
       << "Num micro batches muse <= " << HT_MAX_NUM_MICRO_BATCHES 
       << ", got micro batch id: " << micro_batch_id;
     BlockOrSyncAllInputs(runtime_ctx, micro_batch_id);
-    // precision debug
-    /*
-    NDArrayList input_sums;
-    for (auto& input : inputs) {
-      input_sums.push_back(NDArray::sum(input));
-    }
-    HT_LOG_INFO << hetu::impl::comm::GetLocalDevice() << " micro batch: " << micro_batch_id << ", compute op: " << name()
-      << ", the input vals are (may not sync) " << input_sums;
-    */
-    // if(instantiation_ctx().placement.index() == 0) std::cout << "start_operator_compute" << std::endl;
     instantiation_ctx().start[micro_batch_id]->Record(stream());
     _body->Compute(get_self(), inputs, outputs, runtime_ctx);
     instantiation_ctx().stop[micro_batch_id]->Record(stream());
-    // precision debug
-    /*
-    // stream().Sync();
-    NDArrayList ret_sums;
-    for (auto& ret : rets) {
-      ret_sums.push_back(NDArray::sum(ret));
-    }
-    HT_LOG_INFO << hetu::impl::comm::GetLocalDevice() << ": compute op: " << name()
-      << ", the result is (may not sync) " << ret_sums;
-    */
   }
 
   NDArrayList Compute(const NDArrayList& inputs, RuntimeContext& runtime_ctx, size_t micro_batch_id = 0) {
@@ -1152,6 +1132,7 @@ static const uint64_t UNKNOWN_OP = 1ul << 24;
 static const uint64_t UNUSED_OP = 1ul << 25;
 static const uint64_t PARALLEL_ATTN_OP = 1ul << 26;
 static const uint64_t PARALLEL_ATTN_GRAD_OP = 1ul << 27;
+static const uint64_t BINARY_OP = 1ul << 28;
 static const uint64_t FUSED_GROUP_OP = 1ul << 53;
 static const uint64_t CONCAT_OP = 1ul << 54;
 static const uint64_t CONTIGUOUS_OP = 1ul << 55;
@@ -1205,6 +1186,7 @@ DECLARE_OP_INDICATOR_CHECKER(comm_split, COMM_SPLIT_OP)
 DECLARE_OP_INDICATOR_CHECKER(comm, COMM_OP)
 DECLARE_OP_INDICATOR_CHECKER(parallel_attn, PARALLEL_ATTN_OP)
 DECLARE_OP_INDICATOR_CHECKER(parallel_attn_grad, PARALLEL_ATTN_GRAD_OP)
+DECLARE_OP_INDICATOR_CHECKER(binary, BINARY_OP)
 DECLARE_OP_INDICATOR_CHECKER(unknown, UNKNOWN_OP)
 DECLARE_OP_INDICATOR_CHECKER(communication,
                              PEER_TO_PEER_SEND_OP | PEER_TO_PEER_RECV_OP |

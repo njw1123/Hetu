@@ -600,9 +600,9 @@
 # Optimizer
 #######################################################
 
-- name: sgd_update
-  op: SGDUpdateOp
-  args: Tensor param, Tensor grad, float lr
+# - name: sgd_update
+#   op: SGDUpdateOp
+#   args: Tensor param, Tensor grad, float lr
 
 #######################################################
 # Misc

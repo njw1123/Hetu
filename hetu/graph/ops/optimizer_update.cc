@@ -65,6 +65,7 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
   NDArray& mean = const_cast<NDArray&>(inputs.at(2));
   NDArray& variance = const_cast<NDArray&>(inputs.at(3));
   NDArray& step = const_cast<NDArray&>(inputs.at(4));
+  int64_t step_num = inputs.at(4)->item<int64_t>();
   // TODO: 目前只考虑grad和param的ds一致的情况
   // 后续要支持param冗余
   HT_ASSERT(op->input(0)->cur_ds_union().check_equal(op->input(1)->cur_ds_union()))
@@ -73,8 +74,8 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
   // 如何得到符合ds的grad以及后续的transfer param则交给exec graph中的comm op来做
   HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                   type(), hetu::impl::Adam, grad, param,
-                                  mean, variance, step, learning_rate(), 
-                                  beta1(), beta2(), eps(), weight_decay(), true,
+                                  mean, variance, step, learning_rate(step_num), 
+                                  beta1(), beta2(), eps(), weight_decay(step_num), true,
                                   op->instantiation_ctx().stream());
 }
 
@@ -88,12 +89,13 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
   NDArray& mean = const_cast<NDArray&>(inputs.at(2));
   NDArray& variance = const_cast<NDArray&>(inputs.at(3));
   NDArray& step = const_cast<NDArray&>(inputs.at(4));
+  int64_t step_num = inputs.at(4)->item<int64_t>();
   // 不开zero
   if (!_multi_zero.at(op->graph().OPTIMIZE_STRATEGY_ID)) {
     HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                     type(), hetu::impl::Adam, grad, param,
-                                    mean, variance, step, learning_rate(), 
-                                    beta1(), beta2(), eps(), weight_decay(), true,
+                                    mean, variance, step, learning_rate(step_num), 
+                                    beta1(), beta2(), eps(), weight_decay(step_num), true,
                                     op->instantiation_ctx().stream());
   } 
   // 开zero
@@ -132,8 +134,8 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
       // only update scatter part of param
       HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                       type(), hetu::impl::Adam, grad, param_scatter,
-                                      mean, variance, step, learning_rate(), 
-                                      beta1(), beta2(), eps(), weight_decay(), true,
+                                      mean, variance, step, learning_rate(step_num), 
+                                      beta1(), beta2(), eps(), weight_decay(step_num), true,
                                       op->instantiation_ctx().stream());
       // in-place allgather
       // gather dim和scatter dim对齐
@@ -188,8 +190,8 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
         // 注意这里只有最后一次需要更新step
         HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                         type(), hetu::impl::Adam, split_grad.at(i), split_param_scatter,
-                                        split_mean.at(i), split_variance.at(i), step, learning_rate(), 
-                                        beta1(), beta2(), eps(), weight_decay(), i == split_num - 1 ? true : false,
+                                        split_mean.at(i), split_variance.at(i), step, learning_rate(step_num), 
+                                        beta1(), beta2(), eps(), weight_decay(step_num), i == split_num - 1 ? true : false,
                                         op->instantiation_ctx().stream());
         const auto& comm_groups = comm_groups_list.at(i);
         for (const auto& comm_group : comm_groups) {
@@ -251,34 +253,34 @@ void AdamOpImpl::DoSpecialMergeStrategy(Operator& op, Operator& another_op) {
     << "size mismatch";
 }
 
-Tensor MakeSGDUpdateOp(Tensor param, Tensor grad, float learning_rate,
+Tensor MakeSGDUpdateOp(Tensor param, Tensor grad, OptimizerParamScheduler param_scheduler,
                        OpMeta op_meta) {
-  return Graph::MakeOp(std::make_shared<SGDUpdateOpImpl>(learning_rate),
+  return Graph::MakeOp(std::make_shared<SGDUpdateOpImpl>(param_scheduler),
                        {std::move(param), std::move(grad)}, std::move(op_meta))
     ->output(0);
 }
 
 Tensor MakeSGDUpdateWithGradScalerOp(Tensor param, Tensor grad, Tensor infinite_count, 
-                                     float learning_rate, OpMeta op_meta) {
-  return Graph::MakeOp(std::make_shared<SGDUpdateWithGradScalerOpImpl>(learning_rate),
+                                     OptimizerParamScheduler param_scheduler, OpMeta op_meta) {
+  return Graph::MakeOp(std::make_shared<SGDUpdateWithGradScalerOpImpl>(param_scheduler),
                        {std::move(param), std::move(grad), std::move(infinite_count)}, std::move(op_meta))
     ->output(0);
 }
 
 
 Tensor MakeMomentumUpdateOp(Tensor param, Tensor grad, Tensor velocity,
-                            float learning_rate, float momentum, bool nesterov,
+                            OptimizerParamScheduler param_scheduler, float momentum, bool nesterov,
                             OpMeta op_meta) {
   return Graph::MakeOp(std::make_shared<MomentumUpdateOpImpl>(
-                         learning_rate, momentum, nesterov),
+                         param_scheduler, momentum, nesterov),
                        {std::move(param), std::move(grad), std::move(velocity)},
                        std::move(op_meta))
     ->output(0);
 }
 
 Tensor MakeAdamOp(Tensor param, Tensor grad, Tensor mean, Tensor variance,
-                  float learning_rate, Tensor step, float beta1, float beta2, 
-                  float eps, float weight_decay, OpMeta op_meta) {
+                   OptimizerParamScheduler param_scheduler, Tensor step, float beta1, float beta2, 
+                  float eps, OpMeta op_meta) {
   // pure tp needn't zero 
   std::vector<bool> multi_zero; 
   multi_zero.reserve(param->ds_hierarchy().size());   
@@ -289,7 +291,7 @@ Tensor MakeAdamOp(Tensor param, Tensor grad, Tensor mean, Tensor variance,
   }                 
   // HT_LOG_INFO << hetu::impl::comm::GetLocalDevice() << ": MakeAdamOp: param = " << param << ", multi zero = " << multi_zero;
   return Graph::MakeOp(std::make_shared<AdamOpImpl>(
-                       learning_rate, multi_zero, beta1, beta2, eps, weight_decay),
+                       param_scheduler, multi_zero, beta1, beta2, eps),
                        {std::move(param), std::move(grad), std::move(mean), std::move(variance), std::move(step)},
                        std::move(op_meta))
     ->output(0);

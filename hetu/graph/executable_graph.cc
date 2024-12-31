@@ -166,6 +166,7 @@ bool ExecutableGraph::Instantiate(const TensorList& fetches,
           if (!grad.is_defined()) {
             continue;
           }
+          // TODO: use symbolic shape, replace _num_micro_batches * dp with global_token / local_token
           Tensor grad_scale = MakeDivByConstOp(grad, _num_micro_batches * dp, OpMeta().set_name(grad->name() + "_scale"));
           auto cur_subgraph = GetSubGraph(grad->producer());
           if (cur_subgraph != nullptr) {
@@ -866,6 +867,7 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
         is_continuous_p2p = true;
         auto event = std::make_unique<hetu::impl::CUDAEvent>(op->placement());
         event->Record(Stream(op->placement(), kComputingStream));
+        event->Record(Stream(op->placement(), kSwitchComputingStream));
         event->Block(Stream(op->placement(), kP2PStream));
         _p2p_events.emplace_back(std::move(event));
         ncclGroupStart_safe();
@@ -877,11 +879,10 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
       auto event = std::make_unique<hetu::impl::CUDAEvent>(op->placement());
       event->Record(Stream(op->placement(), kP2PStream));
       event->Block(Stream(op->placement(), kComputingStream));
-      // event->Block(Stream(op->placement(), kOptimizerStream));
+      event->Block(Stream(op->placement(), kSwitchComputingStream));
       _p2p_events.emplace_back(std::move(event));
       // HT_LOG_INFO << local_device << ": nccl group end";
     }
-
     // parallel attn op算子手动实现且比较复杂
     // 目前单独维护attn ctx
     // 这里需要从外部传入micro batch id来确定 fwd存/bwd取 哪个attn ctx
@@ -1309,6 +1310,12 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
     auto& runtime_ctx = runtime_ctx_list[micro_batch_id];
     // set arithmetic shape
     SetShapePlan(_active_shape_plan_list[micro_batch_id]);
+    for (auto& tensor: _leaf_symbolic_tensor_list) {
+      if(HasTensorShape(tensor)){
+        tensor->set_symbolic_shape(GetTensorShape(tensor));
+      }
+    }
+    UpdateExecShapePlan(runtime_ctx);
     // set symbolic shape
     // extra shape deduction in UpdateExecShapePlan() may need it
     for (auto& tensor: _leaf_symbolic_tensor_list) {
@@ -1813,8 +1820,8 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
     local_topo.insert(local_topo.end(), local_placeholder_variable_ops.begin(), local_placeholder_variable_ops.end());
     local_topo.insert(local_topo.end(), local_fw_topo.begin(), local_fw_topo.end());
     local_topo.insert(local_topo.end(), local_bw_topo.begin(), local_bw_topo.end());
-    HT_LOG_DEBUG << local_device  << ": local placeholder & variable ops: " << local_placeholder_variable_ops
-                 << "\nlocal fw topo: " << local_fw_topo << "\nlocal bw topo: " << local_bw_topo;
+    HT_LOG_DEBUG << local_device  << ": local placeholder & variable ops: " << local_placeholder_variable_ops;
+    HT_LOG_DEBUG << local_device << ": local fw topo: " << local_fw_topo << "\nlocal bw topo: " << local_bw_topo;
     HT_LOG_DEBUG << local_device << ": [Execution Plan] get local fw/bw topo end...";
 
     HT_LOG_DEBUG << local_device << ": [Execution Plan] get leaf symbolic tensor list begin...";
