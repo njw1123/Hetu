@@ -1,4 +1,6 @@
 *.pyc
+*.svg
+*.png
 *.csv
 *.tar.gz*
 *.pkl.gz
@@ -21,6 +23,9 @@ third_party/nccl/
 examples/hotspa/data/
 examples/hydraulis/data/
 examples/hydraulis/*.pkl
+examples/hydraulis/func_call/
+examples/hydraulis/dataset_analysis/
+examples/hydraulis/results
 
 # Python
 *.png

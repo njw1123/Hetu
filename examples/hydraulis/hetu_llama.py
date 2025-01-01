@@ -93,7 +93,7 @@ class LLamaAttention(ht.nn.Module):
         '''
         
         assert self.use_flash_attn, "currently only support flash attn"
-        # TODO: support packing api
+        # already support packing api
         attn_output = ht.parallel_attn(
             qkv,             
             self.head_dim, 
@@ -133,7 +133,7 @@ class ParallelMLP(ht.nn.Module):
         # self.add_bias = True
         self.add_bias = False
         
-        self.swiglu = True 
+        self.swiglu = False 
         ffn_hidden_size = config.ffn_hidden_size # 2.7h
         if self.swiglu:
             ffn_hidden_size *= 2 # for swiglu: h -> 2 * 2.7h
@@ -149,7 +149,7 @@ class ParallelMLP(ht.nn.Module):
         )
 
         # self.bias_gelu_fusion = bias_gelu_fusion
-        # self.activation_func = ht.nn.NewGeLU()
+        self.activation_func = ht.nn.NewGeLU(get_multi_ds_parallel_config(ds_parallel_configs, 'activation_func', layer_idx))
 
         self.dense_4h_to_h = ht.nn.HtMultiRowParallelLinear(
             config.ffn_hidden_size,
@@ -166,8 +166,8 @@ class ParallelMLP(ht.nn.Module):
     def forward(self, hidden_states):
         # [b * seq_len, h] -> [b * seq_len, 4h]
         intermediate_parallel = self.dense_h_to_4h(hidden_states)
-        # intermediate_parallel = self.activation_func(intermediate_parallel)
-        intermediate_parallel = ht.swiglu(intermediate_parallel)
+        intermediate_parallel = self.activation_func(intermediate_parallel)
+        # intermediate_parallel = ht.swiglu(intermediate_parallel)
 
         # [b * seq_len, 4h] -> [b * seq_len, h]
         output = self.dense_4h_to_h(intermediate_parallel)
@@ -309,7 +309,7 @@ class LLamaLMHeadModel(ht.nn.Module):
         super(LLamaLMHeadModel, self).__init__()
         self.config = config
         self.ds_parallel_configs = ds_parallel_configs
-        self.transformer = LLamaModel(config, get_multi_ds_parallel_config(ds_parallel_configs, 'gpt'))
+        self.transformer = LLamaModel(config, get_multi_ds_parallel_config(ds_parallel_configs, 'llama'))
         self.lm_head = ht.nn.HtMultiColumnParallelLinear(
             config.n_embd,
             config.vocab_size,
@@ -325,10 +325,11 @@ class LLamaLMHeadModel(ht.nn.Module):
         self.config = config
     
     def forward(
-        self,
+        self, 
         input_ids=None,
         position_ids=None,
         attention_mask=None,
+        loss_mask=None,
         token_type_ids=None,
         labels=None
     ):
@@ -351,7 +352,9 @@ class LLamaLMHeadModel(ht.nn.Module):
 
         loss = None
         if labels is not None:
-            loss = ht.vocab_parallel_cross_entropy(lm_logits,
-                labels, ignored_index = -1, reduction = "mean")
-
+            # print(f"lm_logits shape {lm_logits.shape}, labels shape {labels.shape}")
+            loss_unreduced = ht.vocab_parallel_cross_entropy(lm_logits, labels, ignored_index = -1, reduction = "none").reshape([-1])
+            loss_sum = ht.sum(ht.mul(loss_unreduced, loss_mask))
+            loss_valid_tokens = ht.sum(loss_mask)
+            loss = ht.div(loss_sum, loss_valid_tokens)
         return loss

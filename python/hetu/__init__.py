@@ -260,20 +260,20 @@ def profiler(enabled : bool = True, use_cpu : bool = False, use_cuda : bool = Fa
     return _ProfileContex(enabled, use_cpu, use_cuda, record_shapes, profile_memory)
 
 class _SubGraphContext(object):
-    def __init__(self, subgraph_type = "", name = "global"):
+    def __init__(self, name = "global", module_type = ""):
         if name is None:
             self.subgraph = _hetu_core._internal_context.get_default_subgraph()
         else:
-            self.subgraph = _hetu_core._internal_context.make_new_subgraph(subgraph_type=subgraph_type, name=name)
+            self.subgraph = _hetu_core._internal_context.make_new_subgraph(name=name, use_relative=True, module_type=module_type)
     def __enter__(self):
-        _hetu_core._internal_context.push_subgraph_ctx(self.subgraph.name)
+        _hetu_core._internal_context.push_subgraph_ctx(self.subgraph.global_name)
         return self
     
     def __exit__(self, e_type, e_value, e_trace):
         _hetu_core._internal_context.pop_subgraph_ctx()
 
-def subgraph(subgraph_type="", name=""):
-    return _SubGraphContext(subgraph_type=subgraph_type, name=name)
+def subgraph(name="", module_type=""):
+    return _SubGraphContext(name=name, module_type=module_type)
 
-def add_to_subgraph(tensor, subgraph_name=""):
-    _hetu_core._internal_context.add_op_to_subgraph(tensor, subgraph_name)
+def add_to_subgraph(tensor, global_name=""):
+    _hetu_core._internal_context.add_op_to_subgraph(tensor, global_name)

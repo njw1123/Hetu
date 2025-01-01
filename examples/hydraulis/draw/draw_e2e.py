@@ -16,7 +16,7 @@ def extract_total_run_times(file_path):
         except Exception:
             pass 
 
-    return total_run_times[1:80]
+    return total_run_times[1:50]
 
 def plot_total_run_times(file_paths, labels):
     plt.figure(figsize=(12, 8))
@@ -28,9 +28,10 @@ def plot_total_run_times(file_paths, labels):
     plt.title('Total Run Time Comparison (gbs=64)')
     plt.xlabel('Index')
     plt.ylabel('Total Run Time (ms)')
+    plt.ylim(0, 3000)
     plt.legend()
     plt.grid(True)
-    plt.savefig('./e2e.png')
+    plt.savefig('./optimizer_strategy.png')
 
 if __name__ == "__main__":
     file_paths = [
@@ -47,5 +48,17 @@ if __name__ == "__main__":
         # "Balanced Packing",
         # "Ours Estimated Packing"
         # "Hetero Packing"
+    ]
+    file_paths = [
+        '/home/pkuhetu/lhy/multi_switch/examples/hydraulis/logs/8181/llama7b_gpus16_gbs64_msl8192/log_0.txt',
+        '/home/pkuhetu/lhy/multi_switch/examples/hydraulis/logs/1818/llama7b_gpus16_gbs64_msl8192/log_0.txt',
+        '/home/pkuhetu/lhy/multi_switch/examples/hydraulis/logs/4218/llama7b_gpus16_gbs64_msl8192/log_0.txt',
+        '/home/pkuhetu/lhy/multi_switch/examples/hydraulis/logs/4218_no_split_allgather/llama7b_gpus16_gbs64_msl8192/log_0.txt',
+    ]
+    labels = [
+        "optimizer strategy dp2tp8pp1",
+        "optimizer strategy dp2tp1pp8",
+        "optimizer-compute strategy aligned",
+        "optimizer-compute strategy aligned (w/o split-all-gather)",
     ]
     plot_total_run_times(file_paths, labels)

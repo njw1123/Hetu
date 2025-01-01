@@ -49,7 +49,7 @@ def process_and_plot(file_paths, names, ranges):
     plt.savefig("./fig_packing.png")
 
 # 示例调用
-file_paths = ['./packing_1024/num_heads_4.txt', './packing_1024/num_heads_8.txt', './packing_1024/num_heads_16.txt', './packing_1024/num_heads_32.txt']  # 添加更多文件路径
+file_paths = ['./tencent_packing/num_heads_4.txt', './tencent_packing/num_heads_8.txt', './tencent_packing/num_heads_16.txt', './tencent_packing/num_heads_32.txt']  # 添加更多文件路径
 # ranges = [1, 1, 0.75, 0.5]
 ranges = [1, 1, 1, 1]
 names = ["TP=8", "TP=4", "TP=2", "TP=1"]
