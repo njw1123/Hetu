@@ -81,7 +81,7 @@ NDArray& ExecutableGraph::AllocVariableDataInner(const Tensor& tensor,
   }
   HT_LOG_DEBUG << hetu::impl::comm::GetLocalDevice() << ": alloc exec variable " << tensor;
   // TODO: check meta is valid & maybe we can use non-blocking stream?
-  bool is_param = (_parameter_ops.find(tensor->producer()->id()) != _parameter_ops.end());
+  bool is_param = (_parameter_ops.find(tensor->producer()->id()) != _parameter_ops.end() && tensor->requires_grad());
   bool is_optvar = (_optimizer_variable_ops.find(tensor->producer()->id()) != _optimizer_variable_ops.end());
   // TODO: better compatibility with hot switch and quantization
   if ((_use_origin_param_and_optimizer_buffer || _use_origin_param_and_optimizer_buckets) && (is_param || is_optvar)) {
@@ -94,7 +94,7 @@ NDArray& ExecutableGraph::AllocVariableDataInner(const Tensor& tensor,
         << "must have alloced in AllocRuntimeBuffer, but found " << tensor << " not allocated";
       _preserved_data[tensor->id()] = NDArray(tensor->meta(), 
                                               bucket->AsStorage(), 
-                                              bucket->GetElementOffest(tensor));
+                                              bucket->GetElementOffset(tensor));
     }
     // deprecated: 目前使用buckets
     else if (_use_origin_param_and_optimizer_buffer) {
@@ -108,7 +108,7 @@ NDArray& ExecutableGraph::AllocVariableDataInner(const Tensor& tensor,
       }
       _preserved_data[tensor->id()] = NDArray(tensor->meta(), 
                                               _origin_param_and_optimizer_buffer->AsStorage(), 
-                                              _origin_param_and_optimizer_buffer->GetElementOffest(tensor));
+                                              _origin_param_and_optimizer_buffer->GetElementOffset(tensor));
       */
     }
   } 
@@ -125,7 +125,7 @@ NDArray& ExecutableGraph::AllocVariableDataInner(const Tensor& tensor,
     }
     _preserved_data[tensor->id()] = NDArray(tensor->meta(), 
                                             _origin_param_buffer->AsStorage(), 
-                                            _origin_param_buffer->GetElementOffest(tensor));
+                                            _origin_param_buffer->GetElementOffset(tensor));
     */
   }
   // 其余不在buffer中
@@ -215,7 +215,7 @@ void ExecutableGraph::PreRun(std::vector<RuntimeContext>& runtime_ctx_list) {
         << "The transfer param buffer of " << DataType2Str(transfer_param->dtype()) << " should not be empty";
       auto transfer_param_data = NDArray(transfer_param->meta(),
                                           _transfer_param_buffer_map[transfer_param->dtype()]->AsStorage(), 
-                                          _transfer_param_buffer_map[transfer_param->dtype()]->GetElementOffest(transfer_param));
+                                          _transfer_param_buffer_map[transfer_param->dtype()]->GetElementOffset(transfer_param));
       // 添加runtime allocation
       for (auto& runtime_ctx : runtime_ctx_list) {
         runtime_ctx.add_runtime_allocation(transfer_param->id(), transfer_param_data);
@@ -325,7 +325,7 @@ void ExecutableGraph::PreRun(std::vector<RuntimeContext>& runtime_ctx_list) {
         for (const auto& current_grad : it->second->tensor_list()) {
           auto current_grad_data = NDArray(current_grad->meta(),
                                            it->second->AsStorage(), 
-                                           it->second->GetElementOffest(current_grad));
+                                           it->second->GetElementOffset(current_grad));
           // 添加runtime allocation
           for (auto& runtime_ctx : runtime_ctx_list) {
             runtime_ctx.add_runtime_allocation(current_grad->id(), current_grad_data);
@@ -400,7 +400,7 @@ OpHandlerStatus ExecutableGraph::PostOpHandler(Operator& op, Tensor2NDArrayMap& 
         HT_ASSERT(_accumulate_grad_buffer_map.find(grad->dtype()) != _accumulate_grad_buffer_map.end());
         auto accumulate_grad_data = NDArray(grad->meta(), 
                                             _accumulate_grad_buffer_map[grad->dtype()]->AsStorage(), 
-                                            _accumulate_grad_buffer_map[grad->dtype()]->GetElementOffest(grad));
+                                            _accumulate_grad_buffer_map[grad->dtype()]->GetElementOffset(grad));
         auto grad_stream = grad_op->instantiation_ctx().stream(); 
         if (_grad_scale != 1) {
           NDArray::mul(current_grad_data,
@@ -438,7 +438,7 @@ OpHandlerStatus ExecutableGraph::PostOpHandler(Operator& op, Tensor2NDArrayMap& 
         auto current_grad_data = tensor2data[grad->id()];
         auto accumulate_grad_data = NDArray(grad->meta(), 
                                             _accumulate_grad_buffer_map[grad->dtype()]->AsStorage(), 
-                                            _accumulate_grad_buffer_map[grad->dtype()]->GetElementOffest(grad));
+                                            _accumulate_grad_buffer_map[grad->dtype()]->GetElementOffset(grad));
         auto grad_stream = Stream(grad_op->placement(),
                                   grad_op->instantiation_ctx().stream_index);
         if (_grad_scale != 1) {

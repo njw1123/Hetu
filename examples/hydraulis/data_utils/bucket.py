@@ -80,12 +80,13 @@ class Bucket:
                     # pad to max_seqlen
                     if cur_cu_seqlen < self._max_seqlen:
                         packed_seqs.append(np.array([self._pad_token] * (self._max_seqlen - cur_cu_seqlen)))
+                        cu_seqlens.append(self._max_seqlen)
                 else:
                     # pad to the nearest number that the sequence parallel degree can divide evenly
                     if cur_cu_seqlen % self._alignment != 0:
                         pad_seqlen = self._alignment - (cur_cu_seqlen % self._alignment) 
                         packed_seqs.append(np.array([self._pad_token] * pad_seqlen))
-                        # cu_seqlens[-1] += pad_seqlen
+                        cu_seqlens.append(cur_cu_seqlen + pad_seqlen)
                 packed_batch.append(np.concatenate(packed_seqs))
                 packed_cu_seqlens_list.append(np.array(cu_seqlens, dtype=np.int32))
         assert len(packed_batch) > 0, "currently not support no data after packing"

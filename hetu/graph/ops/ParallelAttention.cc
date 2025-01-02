@@ -1060,11 +1060,12 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
       attn_ctx()->acc_out = NDArray::view(reshaped_output, {batch_size_mul_seq_len, q_num_heads, _head_dim});
       HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttnVarlen, 
                                    attn_ctx()->q, attn_ctx()->k, attn_ctx()->v, cu_seqlens_q, cu_seqlens_k, attn_ctx()->acc_out, attn_ctx()->q,
-                                  attn_ctx()->k, attn_ctx()->v, attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse,
+                                   attn_ctx()->k, attn_ctx()->v, attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse,
                                    empty_ndarray, attn_ctx()->rng_state_list.at(0), 
                                    max_seqlen_q(), max_seqlen_k(), 
                                    p_dropout(), softmax_scale_, false,
                                    true, return_softmax(), op->instantiation_ctx().stream());
+      // HT_LOG_INFO << "Varlen attn cu_seqlens_q is " << cu_seqlens_q;
     }
   }
 }

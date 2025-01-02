@@ -202,10 +202,10 @@ def find_optimal_strategy(
     min_cost_index = None
     if any(estimated_cost_2_list):
         print(f"compute_strategy_id_list = {compute_strategy_id_list}, estimated_cost_2_list = {estimated_cost_2_list} , estimated_cost_1_list = {estimated_cost_1_list}")
-        min_cost_index = np.argmin([cost for cost in estimated_cost_2_list if cost is not None])
+        min_cost_index = np.argmax([cost for cost in estimated_cost_2_list if cost is not None])
     else:
         print(f"compute_strategy_id_list = {compute_strategy_id_list}, estimated_cost_1_list = {estimated_cost_1_list}")
-        min_cost_index = np.argmin(estimated_cost_1_list)
+        min_cost_index = np.argmax(estimated_cost_1_list)
     
     optimal_estimated_cost_1 = estimated_cost_1_list[min_cost_index]
     optimal_batch_indices = batch_indices_list[min_cost_index]

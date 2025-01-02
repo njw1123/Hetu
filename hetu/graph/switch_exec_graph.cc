@@ -287,8 +287,13 @@ size_t ParamBuckets::GetSuggestedBucketId(const Tensor& tensor) {
       || tensor->name().find("final") != std::string::npos) {
     return 0;
   }
-  std::string sub_str = "Block";
-  size_t pos = tensor->name().find(sub_str);
+  std::string sub_str = "block";
+  std::string name = tensor->name();
+  // 将name转换为小写进行匹配
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+      return std::tolower(c);
+  });
+  size_t pos = name.find(sub_str);
   HT_ASSERT (pos != std::string::npos) 
     << "Can't find block num in the tensor name " << tensor->name();
   size_t next_char_pos = pos + sub_str.length();
@@ -1487,7 +1492,7 @@ void SwitchExecGraph::SwitchParams(SWITCH_MODE switch_mode,
     for (const auto& after_param : after_param_buffer->tensor_list()) {
       auto after_param_data = NDArray(after_param->meta(),
                                       after_param_buffer->AsStorage(), 
-                                      after_param_buffer->GetElementOffest(after_param));
+                                      after_param_buffer->GetElementOffset(after_param));
       _switch_graph_pair.second->_preserved_data[after_param->id()] = after_param_data;
     }
     return;

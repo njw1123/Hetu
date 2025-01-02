@@ -117,7 +117,7 @@ def convert_strategy(tp_pp_list, ngpus, layers):
         assert len(layer_tp_groups) == dp, "length of tp group list should all be equal to dp degree"
     return layers_tp_groups, gpu_pos
 
-def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path, zero=False):
+def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path, zero=True):
     dp = len(layers_tp_groups[0])
     dp_union = [dp for _ in range(dp)]
     num_layers = len(layers_tp_groups)
@@ -152,8 +152,8 @@ def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path
 
             },
             'layernorm_final': {
-                'split': {},
-                'dup': [tp_union_list[-1][i] * dp for i in range(dp)],
+                'split': {0: [tp_union_list[-1][i] for i in range(dp)]},
+                'dup': dp_union,
                 'device_group_union': dg_union_list[-1],
                 'type': 'variable'
             }
@@ -178,8 +178,8 @@ def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path
             'range': [block_id,],
             'recompute': [False for _ in range(dp)],
             'layernorm1': {
-                'split': {},
-                'dup': [tp_union_list[block_id][i] * dp for i in range(dp)],
+                'split': {'0': [tp_union_list[block_id][i] for i in range(dp)]},
+                'dup': dp_union,
                 'device_group_union': dg_union_list[block_id],
                 'type': 'variable'
             },
@@ -198,8 +198,8 @@ def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path
                 }
             },
             'layernorm2': {
-                'split': {},
-                'dup': [tp_union_list[block_id][i] * dp for i in range(dp)],
+                'split': {'0': [tp_union_list[block_id][i] for i in range(dp)]},
+                'dup': dp_union,
                 'device_group_union': dg_union_list[block_id],
                 'type': 'variable'
             },

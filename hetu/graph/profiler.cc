@@ -206,7 +206,7 @@ void checkOutputsMemory(const Operator& op, size_t micro_batch_id, const NDArray
     for (size_t j = 0; j < op->num_inputs(); j++) {
       const auto& input = inputs.at(j);
       if (output->storage() == input->storage()) {
-        HT_LOG_DEBUG << local_device << ": micro batch " << micro_batch_id << " " << op->output(i)
+        HT_LOG_TRACE << local_device << ": micro batch " << micro_batch_id << " " << op->output(i)
           << " is inplace (with " << op->input(j) << ")"
           << ", ptr id = " << output->storage()->ptr_id();
         is_inplace = true;
@@ -222,18 +222,18 @@ void checkOutputsMemory(const Operator& op, size_t micro_batch_id, const NDArray
         // all_gather由于开启了共享的buffer不对其进行分析
         continue;
       }
-      HT_LOG_DEBUG << local_device << ": micro batch " << micro_batch_id << " " << op->output(i)
+      HT_LOG_TRACE << local_device << ": micro batch " << micro_batch_id << " " << op->output(i)
         << " malloc new GPU memory with shape = " << output->shape()
         << ", ptr id = " << output->storage()->ptr_id();
       malloc_outputs_map[output->storage()->ptr_id()] = std::make_pair(micro_batch_id, op->output(i));
     } else {
       auto it = malloc_outputs_map.find(output->storage()->split_from_ptr_id());
       if (it == malloc_outputs_map.end()) {
-        HT_LOG_DEBUG << local_device << ": " << op->output(i) << " is not reused from any op outputs"
+        HT_LOG_TRACE << local_device << ": " << op->output(i) << " is not reused from any op outputs"
           << ", whose shape = " << output->shape() << " and ptr id = " << output->storage()->ptr_id();
         continue;
       }
-      HT_LOG_DEBUG << local_device << ": " << op->output(i)
+      HT_LOG_TRACE << local_device << ": " << op->output(i)
         << " is reused from micro batch " << it->second.first << " " << it->second.second << " (ptr id = " << output->storage()->split_from_ptr_id() << ")"
         << ", with shape = " << output->shape()
         << ", ptr id = " << output->storage()->ptr_id();

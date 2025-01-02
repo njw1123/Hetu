@@ -7,12 +7,12 @@ NUM_HEADS=${4:-32}
 GLOBAL_BATCH_SIZE=-1 # 目前改用gtb代替gbs
 GLOBAL_TOKEN_NUM=${5:-10000}
 MAX_SEQ_LEN=${6:-2048}
-SERVER_ADDR=${7:-"${IP_1}"} # master-0
-# SERVER_ADDR=${7:-"${IP_2}"} # worker-0
+# SERVER_ADDR=${7:-"${IP_1}"} # master-0
+SERVER_ADDR=${7:-"${IP_2}"} # worker-0
 # SERVER_ADDR=${7:-"127.0.0.1"} 
 SERVER_PORT=${8:-"23333"}
-HOST_FILE_PATH=${9:-"./scripts/host_single.yaml"}
-ENV_FILE_PATH=${10:-"./scripts/env_A100.sh"}
+HOST_FILE_PATH=${9:-"${ENV_PATH}/host_single.yaml"}
+ENV_FILE_PATH=${10:-"${ENV_PATH}/env_A100.sh"}
 STRATEGY_POOL_PATH=${11:-"./strategy/strategy_pool_7b_A100.json"}
 
 WARM_UP=0
@@ -25,7 +25,7 @@ if [[ ${CASE} -eq 0 ]]; then
 	MULTI_TP_PP_LIST="[[(4, 2), (4, 2)], [(4, 2), (1, 8)], [(4, 2), (1, 4), (1, 4)]]"
 	BATCHING_METHOD=4
 	NUM_GPUS=8
-	MULTI_TP_PP_LIST="[[(8, 1)], [(4, 1), (4, 1)]]"
+	MULTI_TP_PP_LIST="[[(8, 1)], [(4, 1), (1, 4)]]"
 	BATCHING_METHOD=4
 elif [[ ${CASE} -eq 1 ]]; then
 	# homo + greedy packing with static shape

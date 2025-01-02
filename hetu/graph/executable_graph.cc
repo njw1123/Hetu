@@ -18,6 +18,34 @@
 namespace hetu {
 namespace graph {
 
+/*
+static size_t GetLayerId(const Tensor& tensor) {
+  std::string sub_str = "block";
+  std::string name = tensor->name();
+  // 将name转换为小写进行匹配
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+      return std::tolower(c);
+  });
+  size_t pos = name.find(sub_str);
+  HT_ASSERT (pos != std::string::npos) 
+    << "Can't find block num in the tensor name " << tensor->name();
+  size_t next_char_pos = pos + sub_str.length();
+  HT_ASSERT (next_char_pos < tensor->name().length())
+    << "Can't find block num in the tensor name " << tensor->name();
+  std::string layer_num_str = "";
+  while (tensor->name()[next_char_pos] != std::string::npos
+         && tensor->name()[next_char_pos] >= '0' 
+         && tensor->name()[next_char_pos] <= '9') {
+    layer_num_str += tensor->name()[next_char_pos];
+    next_char_pos += 1;
+  }
+  HT_ASSERT(layer_num_str != "")
+    << "Cannot fetch the number after 'Block' for " << tensor->name();
+  size_t layer_num = std::stoi(layer_num_str);
+  return layer_num;
+}
+*/
+
 static bool is_comm_without_reduce_op(const uint64_t comm_type) {
   return comm_type & (PEER_TO_PEER_SEND_OP | PEER_TO_PEER_RECV_OP |
                       ALL_TO_ALL_OP | ALL_GATHER_OP | BROADCAST_OP |
@@ -480,7 +508,7 @@ void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
         }
         HT_LOG_DEBUG << local_device << ": keys = " << keys << "; indices = " << indices << "; splits = " << splits;
         Tensor split_output = MakeSplitOp(
-          result, keys, indices, splits, 
+          result, keys, indices, splits, true,
           OpMeta().set_is_deduce_states(false)
                   .set_name("Split_for_" + comm_op->output(0)->consumer(0)->name()));
         RecordExecTensor(split_output);
@@ -1834,6 +1862,7 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
           }
         }
       }
+      /*
       // workaround: sort grad reduce op & update op for consistent order across heterogeneous strategies
       std::sort(update_op_list.begin(), update_op_list.end(), 
                 [](const OpRef& op1, const OpRef& op2) {
@@ -1855,6 +1884,7 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
                       return op1.get()->input(1)->name() < op2.get()->input(1)->name();
                     }
                   });
+      */
       _local_topo.insert(_local_topo.end(), share_weight_grad_recv_op_list.begin(), share_weight_grad_recv_op_list.end()); // first stage
       _local_topo.insert(_local_topo.end(), share_weight_recv_op_list.begin(), share_weight_recv_op_list.end()); // last stage
       _local_topo.insert(_local_topo.end(), recv_op_list.begin(), recv_op_list.end());

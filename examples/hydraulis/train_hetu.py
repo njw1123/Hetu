@@ -132,7 +132,7 @@ def pretrain(args):
         print(f"Strategy {strategy_id}, DP representive gpu:", dp_representive_gpu)
         multi_dp_representive_gpu.append(dp_representive_gpu)
         
-    ht.global_comm_barrier() 
+    ht.global_comm_barrier_rpc() 
     ds_parallel_configs = read_ds_parallel_config(",".join(multi_config_file_path), num_strategy)
     config = LLaMAConfig(
         vocab_size=args.vocab_size, 
@@ -172,7 +172,7 @@ def pretrain(args):
         config.cu_seqlens_list.append(
             ht.parallel_placeholder(
                 ht.int32, 
-                global_shape=[multi_dp_size[0]], 
+                global_shape=[multi_dp_size[0] * 16], 
                 ds_hierarchy=block.attn.qkv_dense.ds_union_map['split0_dup'], 
                 device_group_hierarchy=block.attn.qkv_dense.device_group_unions,
                 name=f'cu_seqlens_{block_id}'
@@ -333,7 +333,11 @@ def pretrain(args):
             if len(fake_seqlens) > 0:
                 sorted_batch, sorted_len = build_fake_batch_and_len(fake_seqlens, tokenizer.pad)
             else:
-                global_batch = np.array(next(train_iter))
+                try:
+                    global_batch = np.array(next(train_iter))
+                except StopIteration:
+                    print(f"{local_device}: Running out of data, stop training")
+                    return consumed_samples
                 # print("global batch shape is", global_batch.shape)
                 sorted_batch, sorted_len = get_sorted_batch_and_len(global_batch, tokenizer.pad)
             print(f"{local_device}: {len(sorted_batch)} seqs sorted lens is {sorted_len}")

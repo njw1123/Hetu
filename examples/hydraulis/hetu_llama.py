@@ -1,8 +1,7 @@
 import hetu as ht
 import numpy as np
-import torch
 
-from hetu.nn.modules.parallel_multi_ds import parallel_data_provider, parallel_multi_data_provider, get_multi_ds_parallel_config
+from hetu.nn.modules.parallel_utils import get_multi_ds_parallel_config
 
 def generate_cos_sin(seqlen, rotary_dim, dtype):
     assert rotary_dim % 2 == 0
@@ -295,7 +294,7 @@ class LLamaModel(ht.nn.Module):
             # hetero需要显示地插入通信算子
             if i != len(self.h) - 1:
                 next_block = self.h[i + 1]
-                if next_block.rmsnorm_1.sp:
+                if next_block.rmsnorm_1.sequence_parallel:
                     hidden_states = ht.comm(hidden_states, next_block.rmsnorm_1.ds_union_map['split0'], next_block.rmsnorm_1.device_group_unions, name=f"pipeline_layer_{i}_comm")
                 else:
                     hidden_states = ht.comm(hidden_states, next_block.attn.qkv_dense.ds_union_map['split0_dup'], next_block.rmsnorm_1.device_group_unions, name=f"pipeline_layer_{i}_comm")
