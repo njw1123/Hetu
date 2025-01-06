@@ -31,7 +31,6 @@ examples/hydraulis/results
 *.png
 *.json
 *.txt
-*/elastic.egg-info/
 .mypy_cache
 */*.pyc
 */*.so*

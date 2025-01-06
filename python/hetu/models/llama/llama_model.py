@@ -1,7 +1,7 @@
 import hetu as ht
 import numpy as np
 
-from hetu.nn.modules.parallel_multi_ds import parallel_data_provider, parallel_multi_data_provider, get_multi_ds_parallel_config
+from hetu.nn.modules.parallel_utils import parallel_data_provider, parallel_multi_data_provider, get_multi_ds_parallel_config
 
 def generate_cos_sin(seqlen, rotary_dim, dtype):
     assert rotary_dim % 2 == 0
