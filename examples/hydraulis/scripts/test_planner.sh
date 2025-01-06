@@ -1,5 +1,5 @@
 MODEL_SIZE=${1:-"32b"}
-GLOBAL_BATCH_SIZE=-1 # 目前改用gtb代替gbs
+GLOBAL_BATCH_SIZE=-1 # 目前改用gtn代替gbs
 GLOBAL_TOKEN_NUM=${2:-1600000}
 MAX_SEQ_LEN=${3:-32768}
 ENV_FILE_PATH=${4:-"./scripts/env_A100.sh"}

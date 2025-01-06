@@ -151,7 +151,7 @@ def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path
             'blocks': {
 
             },
-            'layernorm_final': {
+            'rmsnorm_final': {
                 'split': {0: [tp_union_list[-1][i] for i in range(dp)]},
                 'dup': dp_union,
                 'device_group_union': dg_union_list[-1],
@@ -177,7 +177,7 @@ def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path
         blocks_json[f'blocks{block_id}'] = {
             'range': [block_id,],
             'recompute': [False for _ in range(dp)],
-            'layernorm1': {
+            'rmsnorm1': {
                 'split': {'0': [tp_union_list[block_id][i] for i in range(dp)]},
                 'dup': dp_union,
                 'device_group_union': dg_union_list[block_id],
@@ -197,7 +197,7 @@ def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path
                     'type': 'variable'
                 }
             },
-            'layernorm2': {
+            'rmsnorm2': {
                 'split': {'0': [tp_union_list[block_id][i] for i in range(dp)]},
                 'dup': dp_union,
                 'device_group_union': dg_union_list[block_id],

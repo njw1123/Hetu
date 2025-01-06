@@ -4,7 +4,7 @@ HIDDEN_SIZE=${2:-4096}
 FFN_HIDDEN_SIZE=${3:-11008}
 # FFN_HIDDEN_SIZE=${3:-2560}
 NUM_HEADS=${4:-32}
-GLOBAL_BATCH_SIZE=-1 # 目前改用gtb代替gbs
+GLOBAL_BATCH_SIZE=-1 # 目前改用gtn代替gbs
 GLOBAL_TOKEN_NUM=${5:-10000}
 MAX_SEQ_LEN=${6:-2048}
 # SERVER_ADDR=${7:-"${IP_1}"} # master-0
@@ -120,7 +120,8 @@ CMD="python3 -u train_hetu.py \
 --ngpus ${NUM_GPUS}"
 
 source ${ENV_FILE_PATH}
-python3 ../../python/hetu/rpc/pssh_start.py \
+# python3 ../../python/hetu/rpc/pssh_start.py \
+python3 -m hetu.rpc.pssh_start \
 --hosts ${HOST_FILE_PATH} \
 --command "$CMD" \
 --server_port ${SERVER_PORT} \

@@ -1,4 +1,5 @@
 from concurrent import futures
+from kv_store import key_value_store_server
 import logging
 import multiprocessing.spawn
 import grpc
@@ -10,6 +11,7 @@ import multiprocessing
 
 MAX_UNFOUND_TIMES = 10000
 
+@key_value_store_server
 class DeviceController(heturpc_pb2_grpc.DeviceControllerServicer):
     def __init__(self, arr, exit_arr, last_heartbeat) -> None:
         super().__init__()
