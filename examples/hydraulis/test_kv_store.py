@@ -1,13 +1,17 @@
 import os
 import socket
 import argparse
-import json
+import time
 import numpy as np
 import hetu as ht
-from hetu.rpc.kv_store import KeyValueStoreClient
+from hetu.rpc.kv_store import KeyValueStoreClient, ProducerConsumer
 
 local_device = None
 all_devices = None
+
+# Define a sample function to compute squares
+def compute_square(n):
+    return n * n
 
 def distributed_init(args):
     global local_device, all_devices
@@ -62,6 +66,36 @@ def test(args):
         print(f"{local_device}: get 'key1 from 'store_1' {value}")
         values = store_2.get_many(['key1', 'key0'])
         print(f"{local_device}: get 'key1' and 'key0' from 'store_2' {values}")
+     
+    print("Initializing ProducerConsumer...")   
+    prod_cons = ProducerConsumer(client, max_workers=4)
+
+    # Produce items with user-specified keys
+    print("Producing items...")
+    if local_device.index == 0:
+        for i in range(5):
+            key = f'item_{i}'
+            prod_cons.produce(key, compute_square, i)
+            time.sleep(0.2)  # Optional: Stagger the production a bit
+    if local_device.index == 1:
+        for i in range(5):
+            key = f'item_{10 + i}'
+            prod_cons.produce(key, compute_square, i)
+            time.sleep(0.2)  # Optional: Stagger the production a bit
+    
+    # Consume items
+    print("Consuming items...")
+    for i in range(5):
+        key = f'item_{i}'
+        item = prod_cons.consume(key)
+        print(f"Consumed {key}: {item}")
+        key = f'item_{10 + i}'
+        item = prod_cons.consume(key)
+        print(f"Consumed {key}: {item}")
+    
+    # Shutdown the executor when done
+    prod_cons.shutdown()
+
 
 if __name__ == '__main__':
     print("Test kv store begin")

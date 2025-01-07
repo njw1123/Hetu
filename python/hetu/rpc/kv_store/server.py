@@ -10,7 +10,7 @@ def key_value_store_server(cls):
     def parse_key(self, combined_key):
         parts = combined_key.split(DELIMITER, 1)
         if len(parts) != 2:
-            raise ValueError("Key must be in the format '<dict_name>\\0<key>'")
+            raise ValueError(f"Key must be in the format '<dict_name>{DELIMITER}<key>'")
         return parts[0], parts[1]
 
     def get_dict_lock(self, dict_name):
@@ -45,7 +45,7 @@ def key_value_store_server(cls):
                 print(f"Server: RemoveJson from dict '{dict_name}' key '{key}' removed")
                 message = "removed"
             else:
-                print(f"Server: RemoveJson key '{key}' not found in dict '{dict_name}'")
+                # print(f"Server: RemoveJson key '{key}' not found in dict '{dict_name}'")
                 message = "key not found"
         return heturpc_pb2.RemoveJsonReply(message=message)
 

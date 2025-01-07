@@ -1,9 +1,10 @@
 import grpc
+import numpy as np
+import json
+import sys
 from hetu.rpc import heturpc_pb2_grpc
 from hetu.rpc import heturpc_pb2
 from .const import *
-import numpy as np
-import json
 
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -29,10 +30,11 @@ class RemoteDict:
 
     def put(self, key, value):
         full_key = f'{self.dict_name}{DELIMITER}{key}'
-        if isinstance(value, (dict, list, np.ndarray, np.number)):
+        if isinstance(value, (int, float, bool, dict, list, np.ndarray, np.number)):
             value = json.dumps(value, cls=NumpyEncoder)
         elif not isinstance(value, str):
-            raise ValueError("Value must be str, dict, list, or numpy type")
+            sys.stderr.write("Value must be int, float, bool, str, dict, list, or numpy type")
+            raise ValueError("Value must be int, float, bool, str, dict, list, or numpy type")
         self.client.stub.PutJson(heturpc_pb2.PutJsonRequest(key=full_key, value=value))
 
     def get(self, key):
@@ -42,7 +44,7 @@ class RemoteDict:
         try:
             value = json.loads(value, object_hook=numpy_decoder)
         except json.JSONDecodeError as e:
-            print(f"JSON decoding error, unable to parse value: {value}")
+            sys.stderr.write(f"JSON decoding error, unable to parse value: {value}")
             raise e
         return value
 
@@ -56,7 +58,8 @@ class RemoteDict:
 
 class KeyValueStoreClient:
     def __init__(self, address='localhost:50051'):
-        self.channel = grpc.insecure_channel(address)
+        self.address = address
+        self.channel = grpc.insecure_channel(self.address)
         self.stub = heturpc_pb2_grpc.DeviceControllerStub(self.channel)
 
     def register_dict(self, dict_name):
