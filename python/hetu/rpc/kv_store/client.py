@@ -6,6 +6,48 @@ from hetu.rpc import heturpc_pb2_grpc
 from hetu.rpc import heturpc_pb2
 from .const import *
 
+def serialize_keys(data):
+    if isinstance(data, dict):
+        serialized_dict = {}
+        for key, value in data.items():
+            # 如果键是整数，转换为字符串并添加标记
+            if isinstance(key, int):
+                serialized_key = f"__int__{key}"
+            elif isinstance(key, float):
+                serialized_key = f"__float__{key}"
+            else:
+                serialized_key = key
+            # 递归处理嵌套结构
+            serialized_dict[serialized_key] = serialize_keys(value)
+        return serialized_dict
+    elif isinstance(data, list):
+        # 如果是列表，递归处理每个元素
+        return [serialize_keys(item) for item in data]
+    else:
+        # 其他类型直接返回
+        return data
+    
+def deserialize_keys(data):
+    if isinstance(data, dict):
+        deserialized_dict = {}
+        for key, value in data.items():
+            # 如果键是带标记的字符串，还原为整数
+            if isinstance(key, str) and key.startswith("__int__"):
+                deserialized_key = int(key[len("__int__"):])
+            elif isinstance(key, str) and key.startswith("__float__"):
+                deserialized_key = int(key[len("__float__"):])
+            else:
+                deserialized_key = key
+            # 递归处理嵌套结构
+            deserialized_dict[deserialized_key] = deserialize_keys(value)
+        return deserialized_dict
+    elif isinstance(data, list):
+        # 如果是列表，递归处理每个元素
+        return [deserialize_keys(item) for item in data]
+    else:
+        # 其他类型直接返回
+        return data
+
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.ndarray):
@@ -30,11 +72,11 @@ class RemoteDict:
 
     def put(self, key, value):
         full_key = f'{self.dict_name}{DELIMITER}{key}'
-        if isinstance(value, (int, float, bool, dict, list, np.ndarray, np.number)):
-            value = json.dumps(value, cls=NumpyEncoder)
+        if isinstance(value, (int, float, dict, list, np.ndarray, np.number)):
+            value = json.dumps(serialize_keys(value), cls=NumpyEncoder)
         elif not isinstance(value, str):
-            sys.stderr.write("Value must be int, float, bool, str, dict, list, or numpy type")
-            raise ValueError("Value must be int, float, bool, str, dict, list, or numpy type")
+            sys.stderr.write("Value must be int, float, str, dict, list, or numpy type")
+            raise ValueError("Value must be int, float, str, dict, list, or numpy type")
         self.client.stub.PutJson(heturpc_pb2.PutJsonRequest(key=full_key, value=value))
 
     def get(self, key):
@@ -42,7 +84,7 @@ class RemoteDict:
         response = self.client.stub.GetJson(heturpc_pb2.GetJsonRequest(key=full_key))
         value = response.value
         try:
-            value = json.loads(value, object_hook=numpy_decoder)
+            value = deserialize_keys(json.loads(value, object_hook=numpy_decoder))
         except json.JSONDecodeError as e:
             sys.stderr.write(f"JSON decoding error, unable to parse value: {value}")
             raise e

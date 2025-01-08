@@ -1,4 +1,5 @@
 import threading
+import time
 from hetu.rpc import heturpc_pb2
 from .const import *
 
@@ -31,10 +32,12 @@ def key_value_store_server(cls):
     def GetJson(self, request, context):
         dict_name, key = self.parse_key(request.key)
         with self.get_dict_lock(dict_name):
+            start_time = time.time()
             while key not in self.json_dicts.get(dict_name, {}):
                 self.dict_locks[dict_name].wait()
             value = self.json_dicts[dict_name][key]
-            print(f"Server: GetJson from dict '{dict_name}' key '{key}'")
+            end_time = time.time()
+            print(f"Server: GetJson from dict '{dict_name}' key '{key}', cost {end_time - start_time}s hanging")
             return heturpc_pb2.GetJsonReply(value=value)
 
     def RemoveJson(self, request, context):

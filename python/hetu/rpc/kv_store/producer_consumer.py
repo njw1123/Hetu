@@ -1,22 +1,16 @@
 import time
-import _hetu_core as ht_core
-from concurrent.futures import ProcessPoolExecutor
-from .client import KeyValueStoreClient
 import logging
 import sys
+import os
 import multiprocessing
+import hetu as ht
+from concurrent.futures import ProcessPoolExecutor
+from .client import KeyValueStoreClient
+
+ht.setup_logging()
 
 # Set the start method to 'spawn' at the very beginning
 multiprocessing.set_start_method('spawn', force=True)
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(processName)s %(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
 
 # Global variables to store client and data store in worker processes
 _worker_client = None
@@ -70,14 +64,14 @@ class ProducerConsumer:
         future = self.executor.submit(_producer_task, key, func, args, kwargs)
         self.futures.append((key, future))
 
-    def consume(self, key, global_barrier=False):
+    def consume(self, key, global_barrier=True):
         """
         Retrieve and remove the data associated with the key.
         """
         try:
             data = self.data_store.get(key)
             if global_barrier:
-                ht_core.global_comm_barrier_rpc()
+                ht.global_comm_barrier_rpc()
             self.data_store.remove(key)
             return data
         except KeyError as e:

@@ -4,6 +4,8 @@ from typing import Union, Tuple, List, Dict, Set, Any, Callable, Iterator, Optio
 _tensor_type_t = TypeVar('T', bound='Tensor')
 
 from .context import *
+from .logger import *
+
 from .nn import *
 from .utils import *
 from .engine import *

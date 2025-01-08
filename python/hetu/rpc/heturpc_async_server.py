@@ -10,7 +10,7 @@ import time
 import multiprocessing
 
 _MAX_UNFOUND_TIMES = 10000
-_MAX_GRPC_WORKERS = 128
+_MAX_GRPC_WORKERS = 64
 
 @key_value_store_server
 class DeviceController(heturpc_pb2_grpc.DeviceControllerServicer):
