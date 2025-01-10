@@ -13,7 +13,7 @@ FFN_HIDDEN_SIZE=11008
 SERVER_ADDR="${IP_2}" # worker-0
 # SERVER_ADDR="127.0.0.1" # 216
 SERVER_PORT="23462"
-HOST_FILE_PATH="/jizhicfs/hymiezhao/lhy/hostfiles/host0123.yaml"
+HOST_FILE_PATH="./hostfiles/host0123.yaml"
 ENV_FILE_PATH="./scripts/env_A800.sh"
 
 NUM_GPUS=$(expr $TP \* $PP \* $DP)
@@ -35,7 +35,7 @@ LOG_FOLDER=logs/exp_tp${TP}_pp${PP}
 mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 
-ROOT_FOLDER=/jizhicfs/hymiezhao/lhy/data
+ROOT_FOLDER=data
 JSON_FILE=${ROOT_FOLDER}/web/refinedweb0.json
 JSON_KEY=content
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json
