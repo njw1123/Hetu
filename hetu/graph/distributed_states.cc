@@ -219,6 +219,8 @@ bool DistributedStates::equal_states_and_order(const std::unordered_map<int32_t,
   return (states1 == states2) && (order1 == order2);                              
 }
 
+// 暂时不管zero
+// zero只用来在define graph上打标签
 bool DistributedStates::check_equal(const DistributedStates& dst_distributed_states) const {
   auto dst_device_num = dst_distributed_states.get_device_num();
   const auto& src_states = get_states();
@@ -289,6 +291,23 @@ bool DistributedStates::check_reduce_dim(const DistributedStates& dst_distribute
   const auto& dst_states = dst_distributed_states.get_states();
   const auto& dst_order = dst_distributed_states.get_order();
   return equal_states_and_order(states, order, dst_states, dst_order);                                 
+}
+
+bool DistributedStates::check_split(const DistributedStates& dst_distributed_states) const {
+  const auto& dst_states = dst_distributed_states.get_states();
+  const auto& dst_order = dst_distributed_states.get_order();
+  int32_t split_num = 1;
+  for (auto o : dst_order) {
+    if (o >= 0) {
+      if (dst_states.at(o) % states(o) != 0) {
+        return false;
+      } else {
+        split_num *= (dst_states.at(o) / states(o));
+      }
+    }
+  }
+  return dst_distributed_states.get_dim(-2) == states(-2) && split_num > 1 &&
+         states(-1) == split_num;
 }
 
 bool DistributedStates::check_allreduce(const DistributedStates& dst_distributed_states) const {

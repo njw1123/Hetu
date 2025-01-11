@@ -8,22 +8,27 @@ namespace graph {
 NDArrayList SliceOpImpl::DoCompute(Operator& op,
                                    const NDArrayList& inputs,
                                    RuntimeContext& ctx) const {
-  return {NDArray::slice(inputs.at(0), get_begin_pos(), get_output_shape(),
-                         op->instantiation_ctx().stream_index)};
+  if (ctx.has_runtime_allocation(op->output(0)->id())) {
+    auto output = ctx.get_runtime_allocation(op->output(0)->id());
+    NDArray::contiguous(NDArray::slice(inputs.at(0), get_begin_pos(), get_output_shape(), op->instantiation_ctx().stream_index), 
+                        op->instantiation_ctx().stream_index, output);
+    return {output};
+  }
+  return {NDArray::slice(inputs.at(0), get_begin_pos(), get_output_shape(), op->instantiation_ctx().stream_index)};
 }
 
 // caution: if the op is symbolic, then the corresponding gradient op should also be symbolic!
 TensorList SliceOpImpl::DoGradient(Operator& op, const TensorList& grad_outputs) const {
   if (symbolic())
     return {op->requires_grad(0) ? MakeSliceGradientOp(grad_outputs.at(0), op->input(0), get_symbolic_begin_pos(),
-                                  get_symbolic_output_shape(),
-                                  op->grad_op_meta().set_name(op->grad_name()))
-                                : Tensor()};
+                                    get_symbolic_output_shape(),
+                                    op->grad_op_meta().set_name(op->grad_name()))
+                                 : Tensor()};
   else
     return {op->requires_grad(0) ? MakeSliceGradientOp(grad_outputs.at(0), op->input(0), get_begin_pos(),
-                                  get_output_shape(),
-                                  op->grad_op_meta().set_name(op->grad_name()))
-                                : Tensor()};
+                                    get_output_shape(),
+                                    op->grad_op_meta().set_name(op->grad_name()))
+                                 : Tensor()};
 }
 
 HTShapeList SliceOpImpl::DoInferShape(Operator& op, 
@@ -80,6 +85,9 @@ void SliceOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_di
 void SliceGradientOpImpl::DoCompute(Operator& op,const NDArrayList& inputs,
                                     NDArrayList& outputs, RuntimeContext& ctx) const {
   auto stream_idx = op->instantiation_ctx().stream_index;
+  if (outputs.at(0)->numel() == 0) {
+    return;
+  }
   NDArray::zeros_(outputs.at(0), stream_idx);
   auto slice_grad_input = NDArray::slice(outputs.at(0), get_begin_pos(),
                                          get_output_shape(), stream_idx);
@@ -94,7 +102,7 @@ HTShapeList SliceGradientOpImpl::DoInferShape(Operator& op,
 
 void SliceGradientOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& outputs, 
                                          const OpMeta& op_meta) const {
-  outputs.at(0)->set_distributed_states(inputs.at(1)->get_distributed_states());  
+  outputs.at(0)->set_distributed_states(inputs.at(0)->get_distributed_states());  
 }
 
 void SliceGradientOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,

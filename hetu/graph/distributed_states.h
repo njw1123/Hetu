@@ -107,6 +107,7 @@ class DistributedStates {
   std::vector<int32_t> reduce_order(int dim) const;
   bool check_reduce_dim(const DistributedStates& dst_distributed_states, int dim) const;
 
+  bool check_split(const DistributedStates& dst_distributed_states) const;
   bool check_allreduce(const DistributedStates& dst_distributed_states) const;
   bool check_scatter(const DistributedStates& dst_distributed_states) const;
   bool check_allgather(const DistributedStates& dst_distributed_states) const;
@@ -178,9 +179,9 @@ class DistributedStatesUnion {
     bool judgement_1 = (_hetero_dim != NULL_HETERO_DIM);
     bool judgement_2 = (_union.size() > 1);
     HT_ASSERT(!(judgement_1 ^ judgement_2))
-        << "hetero means union size is greater than 1"
-        << ", but found hetero dim is " << _hetero_dim
-        << " and union size is " << _union.size();
+      << "hetero means union size is greater than 1"
+      << ", but found hetero dim is " << _hetero_dim
+      << " and union size is " << _union.size();
     return judgement_1;
   }
 
@@ -219,7 +220,7 @@ class DistributedStatesUnion {
   }
 
   const DistributedStatesUnion to_hetero(int32_t dim, int32_t num) const {
-    HT_ASSERT(is_hetero())
+    HT_ASSERT(!is_hetero())
       << "The union is already hetero";
     HT_ASSERT(_union.size() == 1)
       << "Double check, the union is already hetero";
@@ -291,10 +292,15 @@ class DistributedStatesUnion {
     return _union.size();
   }
 
+  bool is_empty() const {
+    return (_union.size() == 0);
+  }
+
   bool check_equal(const DistributedStatesUnion& another) {
     if (is_hetero() != another.is_hetero() 
         || _hetero_dim != another.hetero_dim()
-        || _union.size() != another.size()) {
+        || _union.size() != another.size()
+        || !_split_pattern.check_equal(another.split_pattern())) {
       return false;
     }
     size_t size = _union.size();

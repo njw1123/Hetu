@@ -5,6 +5,8 @@ namespace hetu {
 
 template class SymbolDef<int64_t>;
 template class Symbol<int64_t>;
+template class SymbolDef<double>;
+template class Symbol<double>;
 
 template <typename T>
 T SymbolDef<T>::get_val() const {
@@ -21,12 +23,14 @@ T SymbolDef<T>::get_val() const {
         HT_ASSERT(divisor) << "DIV op can't divide 0";
         return _input_1->get_val() / divisor;
       }
+      /*
       case SymbolOp::REM: {
         HT_ASSERT((std::is_same<T, int64_t>::value)) << "REM op could only used for int64_t";
         auto divisor = _input_2->get_val();
         HT_ASSERT(divisor) << "REM op can't divide 0";
         return _input_1->get_val() % divisor;
       }
+      */
       default:
         HT_RUNTIME_ERROR << "SymbolOp type unspported!";
     }
@@ -54,7 +58,9 @@ HTShape get_HTShape_from_SyShape(const SyShape& sy_shape) {
 }
 
 void set_HTShape_to_SyShape(const HTShape& ht_shape, SyShape& sy_shape) {
-  HT_ASSERT(ht_shape.size() == sy_shape.size()) << "the HTShape and SyShape should have equal dims";
+  HT_ASSERT(ht_shape.size() == sy_shape.size())
+    << "the HTShape and SyShape should have equal dims, but got "
+    << ht_shape.size() << " v.s. " << sy_shape.size();
   auto len = ht_shape.size();
   for (size_t i = 0; i < len; i++) {
     sy_shape[i] = ht_shape[i];

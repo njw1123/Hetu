@@ -400,12 +400,18 @@ class NDArray : public shared_ptr_wrapper<NDArrayDef> {
                            StreamIndex stream_id = DEFAULT_STREAM,
                            NDArray& output = EMPTY);
 
-  static NDArrayList fused_layernorm(const NDArray& input, const NDArray& bn_scale, const NDArray& bn_bias, 
+  static NDArrayList fused_layernorm(const NDArray& input, const NDArray& ln_scale, const NDArray& ln_bias, 
                                      const HTShape& normalized_shape, double eps = 0.01,
                                      StreamIndex stream_id = DEFAULT_STREAM,
                                      NDArray& output = EMPTY,
                                      NDArray& save_mean = EMPTY,
                                      NDArray& save_var = EMPTY);
+
+  static NDArrayList fused_rmsnorm(const NDArray& input, const NDArray& ln_scale, 
+                                   const HTShape& normalized_shape, double eps = 0.01,
+                                   StreamIndex stream_id = DEFAULT_STREAM,
+                                   NDArray& output = EMPTY,
+                                   NDArray& save_var = EMPTY);
 
   static NDArray gather(const NDArray& input, const NDArray& id, int64_t dim,
                         StreamIndex stream_id = DEFAULT_STREAM,
@@ -749,6 +755,12 @@ class NDArrayDef : public shared_ptr_target {
     return _meta.dtype == kInt8 ||
            _meta.dtype == kFloat4 ||
            _meta.dtype == kNFloat4;
+  }
+
+  bool is_equal(const NDArray& other) const {
+    return _meta == other->meta() &&
+           _storage == other->storage() &&
+           _storage_offset == other->storage_offset();
   }
 
   const HTShape& shape() const {

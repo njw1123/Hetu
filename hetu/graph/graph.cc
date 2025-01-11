@@ -3,6 +3,7 @@
 #include "hetu/graph/define_and_run_graph.h"
 #include "hetu/graph/eager_graph.h"
 #include "hetu/graph/executable_graph.h"
+#include "hetu/graph/profiler.h"
 #include "hetu/graph/ops/Contiguous.h"
 #include "hetu/graph/ops/ones_like.h"
 #include "hetu/graph/ops/sum.h"
@@ -99,18 +100,6 @@ Operator& Graph::MakeOp(std::shared_ptr<OpInterface> body, TensorList inputs,
   Graph::InitOnce();
   Operator& op = graph.MakeOpInner(std::move(body), std::move(inputs),
                                    std::move(op_meta));
-  // workaround: 暂时不把pipeline插入的comm op放到任何subgraph中
-  if (op->name().find("pipeline_layer") == std::string::npos) { 
-    if (graph.get_cur_subgraph_name() != "") {
-      graph.AddOpToSubGraph(op, graph.get_cur_subgraph_name());
-    }
-    if (is_optimizer_update_op(op)) {
-      std::shared_ptr<SubGraph> subgraph = graph.GetSubGraph(op->input(0)->producer());
-      if (subgraph != nullptr) {
-        graph.AddOpToSubGraph(op, subgraph->global_graph_name(), SubGraphType::UPDATE);
-      }
-    }
-  }
   return op;
 }
 
@@ -183,7 +172,16 @@ TensorList Graph::Gradients(const TensorList& ys, const TensorList& xs,
         graph.CUR_STRATEGY_ID = cur_strategy_id;
         size_t all_allreduce_num = 0;
         size_t reduce_scatter_num = 0;
-        for (const auto& grad : filtered) {
+        auto cur_dst_ds_union = DistributedStatesUnion();
+        std::unordered_map<int, Tensor> patch_comm_grad_list;
+        // 24.12.20 [Workaround] for LoRA corner case:
+        // For grads in different branches, they may be dup or partial state.
+        // The goal of both `sum -> reduce` and `reduce -> sum` is to merge branches into dup state.
+        // Thus, if there exists dup branches, dup branches should have the same dup state,
+        // and partial branches should turn into dup states by inserting CommOps.
+        // If there is no dup branch, we will apply `sum -> reduce`.
+        for (int i = 0; i < filtered.size(); i++) {
+          auto& grad = filtered.at(i);
           if (is_comm_op(grad->producer())) {
             auto& comm_op_impl = dynamic_cast<CommOpImpl&>(grad->producer()->body());
             auto src_ds_union = grad->producer()->input(0)->cur_ds_union();
@@ -196,11 +194,50 @@ TensorList Graph::Gradients(const TensorList& ys, const TensorList& xs,
             if ((is_homo && src_ds_union.get(0).check_allreduce(dst_ds_union.get(0)))
                 || (!is_homo && src_ds_union.hetero_dim() == -2 && dst_ds_union.hetero_dim() == -1)) {
               all_allreduce_num += 1;
+              if (cur_dst_ds_union.is_empty()) {
+                cur_dst_ds_union = dst_ds_union;
+              } else {
+                HT_ASSERT(cur_dst_ds_union.check_equal(dst_ds_union));
+              }
             }
             if ((is_homo && src_ds_union.get(0).check_reducescatter(dst_ds_union.get(0)))
                 || (!is_homo && src_ds_union.hetero_dim() == -2 && dst_ds_union.hetero_dim() == 0)) {
               reduce_scatter_num += 1;
+              if (cur_dst_ds_union.is_empty()) {
+                cur_dst_ds_union = dst_ds_union;
+              } else {
+                HT_ASSERT(cur_dst_ds_union.check_equal(dst_ds_union));
+              }
             }
+          } else {
+            auto src_ds_union = grad->cur_ds_union();
+            bool is_homo = (src_ds_union.hetero_dim() == NULL_HETERO_DIM);
+            if ((is_homo && src_ds_union.get(0).states(-2) > 1)
+                || (!is_homo && src_ds_union.hetero_dim() == -2)) {
+              if ((is_homo && src_ds_union.get(0).check_allreduce(cur_dst_ds_union.get(0)))
+                  || (!is_homo && src_ds_union.hetero_dim() == -2 && cur_dst_ds_union.hetero_dim() == -1)) {
+                all_allreduce_num += 1;
+              }
+              if ((is_homo && src_ds_union.get(0).check_reducescatter(cur_dst_ds_union.get(0)))
+                  || (!is_homo && src_ds_union.hetero_dim() == -2 && cur_dst_ds_union.hetero_dim() == 0)) {
+                reduce_scatter_num += 1;
+              }
+              patch_comm_grad_list[i] = grad;
+            } else {
+              if (cur_dst_ds_union.is_empty()) {
+                cur_dst_ds_union = src_ds_union;
+              } else {
+                HT_ASSERT(cur_dst_ds_union.check_equal(src_ds_union));
+              }
+            }
+          }
+        }
+        if (!cur_dst_ds_union.is_empty()) {
+          DistributedStatesHierarchy ds_hierarchy;
+          ds_hierarchy.add(cur_dst_ds_union);
+          for (auto& [i, grad] : patch_comm_grad_list) {
+            Tensor comm_grad = MakeCommOp(grad, ds_hierarchy, OpMeta().set_name("workaround_patch_comm_of_" + grad->name()));
+            filtered[i] = std::move(comm_grad);
           }
         }
         HT_ASSERT ((all_allreduce_num == filtered.size() || all_allreduce_num == 0)
@@ -219,31 +256,38 @@ TensorList Graph::Gradients(const TensorList& ys, const TensorList& xs,
       Tensor grad_sum;
       if (is_need_sum_before_reduce) {
         TensorList partial_grad_list;
-        OpName name_of_sum_op_for = "";
+        std::vector<OpName> partial_grad_name_list;
         for (const auto& grad : filtered) {
-          if (is_slice_op(grad->producer()) && is_comm_op(grad->producer()->input(0)->producer())) {
-            ReplaceInput(grad->producer(), 0, grad->producer()->input(0)->producer()->input(0));
-            Tensor partial_grad = grad;
-            partial_grad_list.push_back(partial_grad);
-            name_of_sum_op_for += (partial_grad->name() + ", ");
-          } else {
-            Tensor partial_grad = grad->producer()->input(0);
-            partial_grad_list.push_back(partial_grad);
-            name_of_sum_op_for += (partial_grad->name() + ", ");
-          }
+          Tensor partial_grad = grad->producer()->input(0);
+          partial_grad_list.push_back(partial_grad);
+          partial_grad_name_list.push_back(partial_grad->name());
         }
+        // concatenate names of partial grads
+        OpName concat_name_of_partial_grad = std::accumulate(
+          partial_grad_name_list.begin() + 1, partial_grad_name_list.end(), partial_grad_name_list[0],
+          [](const std::string& a, const std::string& b) {
+            return a + ", " + b;
+        });
         // if allreduce/reduce-scatter group is different between input grads,
         // then assert error in placement group deduce process.
-        Tensor partial_grad_sum = MakeSumOp(partial_grad_list, OpMeta().set_name("sum_op_for_partial_[" + name_of_sum_op_for + "]"));
+        Tensor partial_grad_sum = MakeSumOp(
+          partial_grad_list,
+          OpMeta().set_name("sum_op_for_partial_[" + concat_name_of_partial_grad + "]")
+        );
         partial_grad_sum->set_is_grad(true);
         // 原地的comm
         grad_sum = MakeCommOp(partial_grad_sum, dst_ds_hierarchy, OpMeta().set_name("comm_op_after_partial_grad_sum"));
       } else {
-        OpName name_of_sum_op_for = "";
+        std::vector<OpName> grad_name_list;
         for (const auto& grad : filtered) {
-          name_of_sum_op_for += (grad->name() + ", ");
+          grad_name_list.push_back(grad->name());
         }
-        grad_sum = MakeSumOp(filtered, OpMeta().set_name("sum_op_for_[" + name_of_sum_op_for + "]"));
+        OpName concat_name_of_grad = std::accumulate(
+          grad_name_list.begin() + 1, grad_name_list.end(), grad_name_list[0],
+          [](const std::string& a, const std::string& b) {
+            return a + ", " + b;
+        });
+        grad_sum = MakeSumOp(filtered, OpMeta().set_name("sum_op_for_[" + concat_name_of_grad + "]"));
       }
       grad_sum->set_is_grad(true);
       return grad_sum;
@@ -252,7 +296,10 @@ TensorList Graph::Gradients(const TensorList& ys, const TensorList& xs,
 
   // traverse the forward graph in the reversed topo order
   auto topo = Graph::TopoSort(ys, num_ops_hint);
-  for (auto it = topo.rbegin(); it != topo.rend(); ++it) {  
+  
+
+
+  for (auto it = topo.rbegin(); it != topo.rend(); ++it) { 
     auto& op = it->get();
     TensorList grad_outputs;
     if (op->num_outputs() > 0) {
@@ -273,7 +320,7 @@ TensorList Graph::Gradients(const TensorList& ys, const TensorList& xs,
       // 例如要先BatchedIsendIrecv再SplitAllReduce/SplitReduceScatter
       // 更多情形目前还未遇到
       bool skip_actual_gradient_op = false;
-      if (is_comm_op(op)) {
+      if (is_comm_op(op) && grad_outputs.size() > 0 && grad_outputs.at(0).is_defined()) {
         auto& comm_op_impl = dynamic_cast<CommOpImpl&>(op->body());
         HT_ASSERT(grad_outputs.size() == 1)
           << "Comm op outputs size should be 1";
@@ -356,6 +403,16 @@ TensorList Graph::Gradients(const TensorList& ys, const TensorList& xs,
             OpMeta().set_name("workaround_share_weight_grad_inter_comm")); // inter group op
           grad_outputs.at(0)->set_is_grad(true);
           grad_outputs.at(0)->producer()->set_fw_op_id(op->id());
+          // 其应该不属于任何一个subgraph而被放到最后的update subgraph中只执行一次
+          /*
+          auto& cur_graph = op->graph();
+          std::shared_ptr<SubGraph> subgraph = cur_graph.GetSubGraph(op);
+          if (subgraph != nullptr) {
+            cur_graph.AddOpToSubGraph(grad_outputs.at(0)->producer(), 
+                                      subgraph->global_name(), 
+                                      SubGraphOpType::BACKWARD);
+          }
+          */
           // 2、make intra comm op
           // SplitAllReduce/SplitReduceScatter
           // 将partial再都转化为dup（SplitAllReduce）或者split0（SplitReduceScatter）
@@ -380,13 +437,15 @@ TensorList Graph::Gradients(const TensorList& ys, const TensorList& xs,
         if (!grad_inputs[i].is_defined())
           continue;
         // bw subgraph deduce
-        // TODO: subgraph need to contain other inserted intermediate op (e.g. sum)
+        // note subgraph no need to contain other inserted intermediate op (e.g. sum)
+        // these ops belong to update subgraph
         auto& cur_graph = op->graph();
         std::shared_ptr<SubGraph> subgraph = cur_graph.GetSubGraph(op);
         if (subgraph != nullptr) {
+          // HT_LOG_INFO << grad_inputs[i]->producer() << " will place in the same subgraph " << subgraph->global_name() << " with fwd op " << op;
           cur_graph.AddOpToSubGraph(grad_inputs[i]->producer(), 
-                                    subgraph->global_graph_name(), 
-                                    SubGraphType::BACKWARD);
+                                    subgraph->global_name(), 
+                                    SubGraphOpType::BACKWARD);
         }
         grad_inputs[i]->set_is_grad(true);
         grad_inputs[i]->producer()->set_fw_op_id(op->id());
@@ -407,7 +466,7 @@ TensorList Graph::Gradients(const TensorList& ys, const TensorList& xs,
               << "something wrong when initializing or deducing the ds for " << grad_inputs[i];
             // HT_LOG_DEBUG << local_device << ": " << "grad_op: " << grad_op << ": states: " << ds_grad.ds_info() << ", shape: " << grad_inputs[i]->shape();
             // partial->duplicate 
-            if (ds_grad.get_dim(-2) > 1) { 
+            if (ds_grad.get_dim(-2) > 1 && !is_binary_op(op)) { 
               int32_t device_num = ds_grad.get_device_num();
               // std::pair<std::vector<int32_t>, int32_t> src2dst({{-2}, -1});
               std::pair<std::vector<int32_t>, int32_t> src2dst;
@@ -421,7 +480,7 @@ TensorList Graph::Gradients(const TensorList& ys, const TensorList& xs,
               } 
               // share weight
               // TODO: comm op后续要支持变成一个p2p和一个reduce
-              // 这样的话如果is_comm_op(op->input(i)->producer()
+              // 这样的话如果is_comm_op(op->input(i)->producer())
               // 那么可以全部交给这个comm op进行处理
               if (is_comm_op(op->input(i)->producer())
                   && is_variable_op(op->input(i)->producer()->input(0)->producer())) {
@@ -579,14 +638,6 @@ std::ostream& operator<<(std::ostream& os, GraphType type) {
 std::ostream& operator<<(std::ostream& os, const Graph& graph) {
   os << "graph(name=" << graph.name() << ", id=" << graph.id()
      << ", type=" << graph.type() << ")";
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os, SubGraph& subgraph) {
-  os << "subgraph(name=" << subgraph.name() << ", type=" << subgraph.subgraph_type()
-     << ", ops=" << subgraph.ops() << ", bwd_ops=" << subgraph.bwd_ops() << 
-     ", update_ops=" << subgraph.update_ops() << ", subgraphs=" << subgraph.subgraph_info().size() << "-"
-     << subgraph.subgraph_info();
   return os;
 }
 

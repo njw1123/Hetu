@@ -178,15 +178,16 @@ bool OpInterface::DoInstantiate(Operator& op, const Device& placement,
   auto& inst_ctx = op->instantiation_ctx();
   inst_ctx.placement = placement;
   inst_ctx.stream_index = stream_index;
+  auto enable_timing = op->graph().EVENT_TIMING;
   if (placement.is_cuda()) {
     for (size_t i = 0; i < HT_MAX_NUM_MICRO_BATCHES; i++) { 
-      inst_ctx.start[i] = std::make_unique<hetu::impl::CUDAEvent>(placement);
-      inst_ctx.stop[i] = std::make_unique<hetu::impl::CUDAEvent>(placement);
+      inst_ctx.start[i] = std::make_unique<hetu::impl::CUDAEvent>(placement, enable_timing);
+      inst_ctx.stop[i] = std::make_unique<hetu::impl::CUDAEvent>(placement, enable_timing);
     }
   } else {
     for (size_t i = 0; i < HT_MAX_NUM_MICRO_BATCHES; i++) {     
-      inst_ctx.start[i] = std::make_unique<hetu::impl::CPUEvent>();
-      inst_ctx.stop[i] = std::make_unique<hetu::impl::CPUEvent>();
+      inst_ctx.start[i] = std::make_unique<hetu::impl::CPUEvent>(enable_timing);
+      inst_ctx.stop[i] = std::make_unique<hetu::impl::CPUEvent>(enable_timing);
     }
   }
   Operator::for_each_output_tensor(
@@ -249,7 +250,8 @@ NDArrayList OpInterface::DoAllocOutputs(Operator& op, const NDArrayList& inputs,
           // mempool debug use
           /*
           HT_LOG_INFO << hetu::impl::comm::GetLocalDevice() << ": exec op " << op
-            << " on-the-fly alloc output " << i << " shape = " << output_shape << " stream = " << op->instantiation_ctx().stream();
+            << " on-the-fly alloc output " << i << " shape = " << output_shape << " stream = " << op->instantiation_ctx().stream()
+            << " placement = " << op->instantiation_ctx().placement;
           if (op->name() == "OnesLikeOp" || op->name() == "VocabParallelCrossEntropyOp") {
             HT_LOG_INFO << "--- sync point ---";
             op->instantiation_ctx().stream().Sync();
@@ -598,25 +600,6 @@ DeviceGroup& OpDef::device_group() {
   else {
     HT_RUNTIME_ERROR << "Ensure you have instantiate the CUR_HETERO_ID and set USE_HETERO_ID to true";
   }
-}
-
-size_t OpDef::inferred_local_placement_group_idx() const {
-  HT_ASSERT(!graph().USE_HETERO_ID)
-    << "inferred_local_placement_group_idx should only used when hetero id is not provided";
-  auto inferred = hetu::impl::comm::GetLocalDevice();
-  HT_ASSERT(placement().is_undetermined() || placement() == inferred)
-    << "inferred_local_placement_group_idx is really a bad idea! "
-    << "It is mainly used when the op is not instantiated";
-  HT_ASSERT(_inst_ctx.has_placement_group)
-    << "inferred_local_placement_group_idx should at least guarantee there is a placement group union";
-  if (_inst_ctx.placement_group_union.has(inferred)) {
-    return _inst_ctx.placement_group_union.get_index(inferred);
-  }
-  if (graph().type() == GraphType::DEFINE_AND_RUN) {
-    HT_ASSERT(graph().SUGGESTED_HETERO_ID == 0)
-      << "Shouldn't change the SUGGESTED_HETERO_ID of the define graph";
-  }
-  return _inst_ctx.placement_group_union.size() > 1 ? graph().SUGGESTED_HETERO_ID : 0;
 }
 
 Operator::Operator(OpIdentifier ids, std::shared_ptr<OpInterface> body,
