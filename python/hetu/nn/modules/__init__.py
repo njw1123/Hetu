@@ -44,5 +44,5 @@ __all__ = [
     'LoRAParallelLayerNorm', 'LoRAParallelEmbedding', 'LoRAVocabParallelEmbedding', 
     'LoRAColumnParallelLinear', 'LoRARowParallelLinear', 'LoRAModel',
     # parallel_multi_ds
-    'HtMultiParallelRMSNorm', 'HtMultiParallelLayerNorm', 'HtMultiParallelEmbedding', 'HtMultiVocabParallelEmbedding', 'HtMultiColumnParallelLinear', 'HtMultiRowParallelLinear',
+    'HtMultiParallelRMSNorm', 'HtMultiParallelLayerNorm', 'HtMultiParallelEmbedding', 'HtMultiVocabParallelEmbedding', 'HtMultiColumnParallelLinear', 'HtMultiRowParallelLinear', 'HtParallelConv2d'
 ]

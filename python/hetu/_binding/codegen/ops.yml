@@ -666,6 +666,11 @@
   args: Tensor input, Tensor mask, double val=0
   self: input
 
+- name: masked_scatter
+  op: MaskedScatterOp
+  args: Tensor input, Tensor mask, Tensor source
+  self: input
+
 - name: norm
   op: NormOp
   args: Tensor input, int64_t p=1, int64_t dim=0, bool keepdim=False

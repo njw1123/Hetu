@@ -28,7 +28,7 @@ static void checkOutputsMemory(const Operator& op, size_t micro_batch_id, const 
     const auto& output = outputs.at(i);
     bool is_inplace = false;
     for (size_t j = 0; j < op->num_inputs(); j++) {
-      const auto& input = inputs.at(i);
+      const auto& input = inputs.at(j);
       if (output->storage() == input->storage()) {
         HT_LOG_DEBUG << local_device << ": micro batch " << micro_batch_id << " " << op->output(i)
           << " is inplace (with " << op->input(j) << ")"
@@ -1098,49 +1098,60 @@ void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
           << "wrong src and dst group relationship for " << comm_op
           << ", src_group = " << info.src_group << " and dst group = " << info.dst_group;
         auto local_device_index = info.src_group.get_index(local_device);
-        const auto& local_dst_ds = info.local_dst_ds;
-        auto cur_state_index = local_dst_ds.map_device_to_state_index(local_device_index);
-        const auto& order = local_dst_ds.get_order();
-        const auto& states = local_dst_ds.get_states();
+        auto cur_state_index = info.local_dst_ds.map_device_to_state_index(local_device_index);
+        const auto& order = info.local_dst_ds.get_order();
         HTAxes keys; 
         HTShape indices, splits;
         for (auto o : order) {
-          if (o >= 0) { 
+          if (o >= 0 && info.local_dst_ds.get_dim(o) != info.local_src_ds.get_dim(o)) { 
             keys.push_back(o);
-            splits.push_back(states.at(o));
-            indices.push_back(cur_state_index[o]);
+            auto split_num = info.local_dst_ds.get_dim(o) / info.local_src_ds.get_dim(o);
+            splits.push_back(split_num);
+            indices.push_back(cur_state_index[o] % split_num);
           }
         }
         HT_LOG_DEBUG << local_device << ": keys = " << keys << "; indices = " << indices << "; splits = " << splits;
         Tensor split_output = MakeSplitOp(
-          result, keys, indices, splits, 
-          OpMeta().set_is_deduce_states(false));
+          result, keys, indices, splits,
+          OpMeta().set_is_deduce_states(false)
+                  .set_name("Split_for_" + comm_op->output(0)->consumer(0)->name()));
         RecordExecTensor(split_output);
         auto& split_op = split_output->producer();
+        split_op->set_fw_op_id(result->producer()->fw_op_id());
         split_op->MapToParallelDevices(info.src_group_union);
         split_op->Instantiate(local_device, kComputingStream);
         result = split_output;
-        HT_LOG_DEBUG << local_device << ": substitute comm_op to split_op";        
+        HT_LOG_DEBUG << local_device << ": substitute " << comm_op << " to split_op";        
         determine_flag = true;
         local_comm_flag = true;
       }
-      if ((comm_type & SCATTER_OP) != 0) {
+     if ((comm_type & SCATTER_OP) != 0) {
         HT_ASSERT(info.src_group == info.dst_group)
           << "wrong src and dst group relationship!";
         auto local_device_index = info.src_group.get_index(local_device);
         auto cur_state_index = info.local_dst_ds.map_device_to_state_index(local_device_index);
-        auto split_num = info.local_dst_ds.get_dim(0) / info.local_src_ds.get_dim(0);
-        auto indice = cur_state_index[0] % split_num;
-        HTAxes keys = {0};
-        HTShape indices = {indice};
-        HTShape splits = {split_num};
-        Tensor scatter_output = MakeSplitOp(result, keys, indices, splits, OpMeta().set_is_deduce_states(false));
+        const auto& order = info.local_dst_ds.get_order();
+        HTAxes keys; 
+        HTShape indices, splits;
+        for (auto o : order) {
+          if (o >= 0 && info.local_dst_ds.get_dim(o) != info.local_src_ds.get_dim(o)) { 
+            keys.push_back(o);
+            auto split_num = info.local_dst_ds.get_dim(o) / info.local_src_ds.get_dim(o);
+            splits.push_back(split_num);
+            indices.push_back(cur_state_index[o] % split_num);
+          }
+        }
+        Tensor scatter_output = MakeSplitOp(
+          result, keys, indices, splits,
+          OpMeta().set_is_deduce_states(false)
+                  .set_name(result->name() + "_Scatter"));
         RecordExecTensor(scatter_output);
         auto& scatter_op = scatter_output->producer();
+        scatter_op->set_fw_op_id(result->producer()->fw_op_id());
         scatter_op->MapToParallelDevices(info.src_group_union);
         scatter_op->Instantiate(local_device, kComputingStream);
         result = scatter_output;
-        HT_LOG_DEBUG << local_device << ": substitute comm_op to scatter_op";      
+        HT_LOG_DEBUG << local_device << ": substitute " << comm_op << " to scatter_op, input = " << comm_op->input(0) << ", output consumers = " << comm_op->output(0)->consumers();    
         determine_flag = true;
         local_comm_flag = true;
       }

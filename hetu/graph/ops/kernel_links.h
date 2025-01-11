@@ -227,6 +227,10 @@ DECLARE_KERNEL_CPU_AND_CUDA(Linear, const NDArray& a, bool trans_a, const NDArra
 DECLARE_KERNEL_CPU_AND_CUDA(Log, const NDArray&, NDArray&, const Stream&);
 DECLARE_KERNEL_CPU_AND_CUDA(Maskedfill, const NDArray&, const NDArray&,
                             double, NDArray&, const Stream&);
+DECLARE_KERNEL_CPU_AND_CUDA(MaskedScatter, const NDArray&, const NDArray&,
+                            const NDArray&, NDArray&, const Stream&);
+DECLARE_KERNEL_CPU_AND_CUDA(MaskedSelect, const NDArray&, const NDArray&,
+                            NDArray&, const Stream&);
 DECLARE_KERNEL_CPU_AND_CUDA(MatDot, const NDArray&, const NDArray&, NDArray&,
                             const Stream&);
 DECLARE_KERNEL_CPU_AND_CUDA(MatMul, const NDArray& a, bool trans_a, const NDArray& b,

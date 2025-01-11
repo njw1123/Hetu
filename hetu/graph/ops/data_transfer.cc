@@ -88,7 +88,20 @@ NDArrayList DataTransferOpImpl::DoCompute(Operator& op,
   bool same_dtype = datatype() == kUndeterminedDataType || datatype() == inputs.front()->dtype();
   if (same_device && same_dtype)
     return inputs;
-  NDArrayList outputs = DoAllocOutputs(op, inputs, ctx, dev());
+  
+  // NDArrayList outputs;
+  // if(dev().is_undetermined()) {
+  //   outputs = DoAllocOutput(op, inputs, ctx, inputs.front()->device())
+  // }
+  // else{
+  //   outputs = DoAllocOutputs(op, inputs, ctx, dev());
+  // }
+
+  auto alloc_dev = dev();
+  if(alloc_dev.is_undetermined()) alloc_dev = inputs.front()->device();
+
+  NDArrayList outputs = DoAllocOutputs(op, inputs, ctx, alloc_dev);
+  
   NDArray::to(inputs.front(), outputs.front()->device(),
               outputs.front()->dtype(), op->instantiation_ctx().stream_index,
               outputs.front());

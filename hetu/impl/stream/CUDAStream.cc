@@ -32,12 +32,15 @@ static void InitDevice(int32_t device_id) {
     << num_devices;
   hetu::cuda::CUDADeviceGuard guard(device_id);
   for (int32_t i = 0; i < HT_NUM_STREAMS_PER_DEVICE; i++) {
-    CudaStreamCreateWithPriority(
-      &device_streams[device_id][i],
-      i == 0 ? cudaStreamDefault : cudaStreamNonBlocking, 0);
+    if(i == 0) device_streams[device_id][i] = cudaStreamLegacy;
+    else{
+      CudaStreamCreateWithPriority(
+        &device_streams[device_id][i], cudaStreamDefault, 0);
+    }
   }
   device_initialized[device_id] = 1;
 }
+
 
 inline static void InitDeviceOnce(int32_t device_id) {
   std::call_once(device_init_flags[device_id], InitDevice, device_id);

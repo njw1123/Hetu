@@ -49,9 +49,26 @@ DistributedStates conv2d_deduce_states(
   auto new_lorder = get_new_order(l2res_map, lorder);
   auto new_rorder = get_new_order(r2res_map, rorder);
   // few cases
-  if (new_lorder != new_rorder) {
-    new_lorder[get_index(new_lorder, 1)] = -1;
-    new_rorder[get_index(new_rorder, 0)] = -1;
+  if(new_lorder.size() != new_rorder.size()){
+    if(new_lorder.size() + 1 == new_rorder.size()){
+      new_lorder.push_back(-1);
+      new_rorder[get_index(new_rorder, 1)] = -1;
+    }
+    else if(new_lorder.size() == new_rorder.size() + 1){
+      new_lorder[get_index(new_lorder, 1)] = -1;
+      new_rorder.push_back(-1);
+    }
+    HT_ASSERT(new_lorder == new_rorder) << "new_lorder is not equal to new_rorder!";
+  }
+  else if (new_lorder != new_rorder) {
+    if(new_lorder.size() == 1){
+      new_lorder[get_index(new_lorder, 1)] = -1;
+      new_rorder[get_index(new_rorder, 0)] = -1;
+    }
+    else if(new_lorder.size() == 2){
+      new_lorder[get_index(new_lorder, 0)] = -1;
+      new_rorder[get_index(new_rorder, 1)] = -1;      
+    }
     HT_ASSERT(new_lorder == new_rorder) << "new_lorder is not equal to new_rorder!";
   } else if (std::find(new_lorder.begin(), new_lorder.end(), 0) != new_lorder.end()
              && ds_l.get_dim(-1) > 1) {
@@ -128,6 +145,11 @@ void Conv2dOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& outputs,
   outputs.at(0)->set_distributed_states(conv2d_deduce_states(l2res_map, r2res_map, ds_input, ds_filter));
 }
 
+void Conv2dOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
+                                        TensorList& outputs, const OpMeta& op_meta) const {
+  outputs.at(0)->cur_ds_union().set_hetero_dim(inputs_hetero_dim.at(0));             
+}
+
 void Conv2dGradientofFilterOpImpl::DoCompute(Operator& op,
                                              const NDArrayList& inputs,
                                              NDArrayList& outputs,
@@ -163,6 +185,13 @@ void Conv2dGradientofFilterOpImpl::DoDeduceStates(const TensorList& inputs, Tens
   outputs.at(0)->set_distributed_states(ds_filter_grad);
 }
 
+
+void Conv2dGradientofFilterOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
+                                        TensorList& outputs, const OpMeta& op_meta) const {
+  std::cout << "Conv2dGradientofFilterOpImpl DoDeduceHeterProp " << inputs_hetero_dim << std::endl;
+  outputs.at(0)->cur_ds_union().set_hetero_dim(-2);
+}
+
 void Conv2dGradientofDataOpImpl::DoCompute(Operator& op,
                                            const NDArrayList& inputs,
                                            NDArrayList& outputs,
@@ -196,6 +225,12 @@ void Conv2dGradientofDataOpImpl::DoDeduceStates(const TensorList& inputs, Tensor
   HT_ASSERT(ds_input.check_equal(ds_input_grad))
     << "Distributed states for input_grad should be equal to input!";
   outputs.at(0)->set_distributed_states(ds_input_grad);
+}
+
+void Conv2dGradientofDataOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
+                                        TensorList& outputs, const OpMeta& op_meta) const {
+  std::cout << "Conv2dGradientofDataOpImpl DoDeduceHeterProp " << inputs_hetero_dim << std::endl;
+  outputs.at(0)->cur_ds_union().set_hetero_dim(inputs_hetero_dim.at(1));
 }
 
 void Conv2dAddBiasOpImpl::DoCompute(Operator& op,
@@ -260,6 +295,11 @@ void Conv2dAddBiasOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& o
     << "Distributed states of bias should be equal to input!";
 
   outputs.at(0)->set_distributed_states(ds_input);  
+}
+
+void Conv2dAddBiasOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
+                                        TensorList& outputs, const OpMeta& op_meta) const {
+  outputs.at(0)->cur_ds_union().set_hetero_dim(inputs_hetero_dim.at(0));
 }
 
 Tensor MakeConv2dOp(Tensor input, Tensor filter, int64_t padding, int64_t stride,

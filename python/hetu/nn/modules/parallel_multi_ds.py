@@ -11,6 +11,7 @@ __all__ = [
     'HtMultiVocabParallelEmbedding',
     'HtMultiParallelLayerNorm',
     'HtMultiParallelRMSNorm',
+    'HtParallelConv2d'
 ]
 
 def parallel_data_provider(global_data, ds_union, device_group_index, device_index):
@@ -93,8 +94,9 @@ def config2ds(config):
     elif config['type'] == 'variable':
         hetero_dim = -1
     else:
-        raise RuntimeError(f"unsupported type {config['type']}!")   
+        raise RuntimeError(f"unsupported type {config['type']}!")  
     hetero_sum = len(config['device_group_union'])
+    print("config['device_group_union']", config['device_group_union'])
     if hetero_sum == 1:
         hetero_dim = -3
     for hetero_num in range(hetero_sum):
@@ -212,6 +214,9 @@ class HtMultiParallelLayerNorm(Module):
                 f'for sequence parallel, layernorm {self.name} need input fully sharded in dimension 0 for each element in the union, but found {input_p.ds_hierarchy}'
             # do sequence parallel layernorm: [bsz * seq_len // tp, hidden_size]
             # print(f'in sp, ln input shape = {input_p.shape}')
+            # print("input_p", input_p)
+            # print("weight", self.weight)
+            # print("bias", self.bias)
             output_ln = hetu.fused_layernorm(input_p, self.weight, self.bias, self.normalized_shape, \
                                              self.eps, device_group_hierarchy=self.device_group_unions, name=self.name + '_sp')[0]
             # allgather will be auto done in later column parallel
@@ -390,6 +395,55 @@ class HtMultiColumnParallelLinear(Module):
                 output = hetu.comm(tensor_split01, self.ds_union_map['split0_dup'])
 
         return output
+
+
+
+class HtParallelConv2d(Module):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, multi_ds_parallel_config, stride=1, padding=0, bias = False, init_method="xavier_normal_", dtype=hetu.float32, name="proj"):
+        super(HtParallelConv2d, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.multi_ds_parallel_config = multi_ds_parallel_config
+        self.stride = stride
+        self.padding = padding
+        self.bias = bias
+        self.dtype = dtype
+        self.name = name
+
+        self.device_index = []
+        self.device_group_unions = []
+        self.ds_union_map = {'dup': []}
+        for ds_parallel_config in multi_ds_parallel_config:
+            ds_union_dup, device_group_union = config2ds(ds_parallel_config)
+            self.device_group_unions.append(device_group_union)
+            hetero_size = len(device_group_union)
+            hetere_dim = ds_union_dup.hetero_dim
+            assert hetere_dim == -1 or hetere_dim == -3, "Conv2d only support hetero on dup"
+            device_group_index, device_index = get_local_index(device_group_union)
+            self.device_index.append(device_index)
+            self.ds_union_map['dup'].append(ds_union_dup)
+            
+        self.weight = hetu.parallel_parameter(eval(f'hetu.xavier_normal_initializer()'),
+                                              [out_channels, in_channels, kernel_size, kernel_size],
+                                              self.ds_union_map['dup'], self.device_index,
+                                              dtype=dtype, requires_grad=True,
+                                              device_group_hierarchy=self.device_group_unions, name=f'{self.name}_weight')
+        
+        if self.bias:
+            self.bias = hetu.parallel_parameter(hetu.zeros_initializer(), [out_channels],
+                                                self.ds_union_map['dup'], self.device_index,
+                                                dtype=dtype, requires_grad=True,
+                                                device_group_hierarchy=self.device_group_unions, name=f'{self.name}_bias')
+
+    def forward(self, input):
+        if self.bias:
+            return hetu.conv2d(input, self.weight, self.bias, self.padding, self.stride)
+        return hetu.conv2d(input, self.weight, self.padding, self.stride)
+
+
+        
+
     
 # process: x->split1, w->split0 => y->partial => y->dup    
 class HtMultiRowParallelLinear(Module):

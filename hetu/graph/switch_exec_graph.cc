@@ -318,10 +318,19 @@ size_t ParamBuckets::GetSuggestedBucketId(const Tensor& tensor) {
   // workaround
   // 目前通过name来判断是python端的哪个layer
   // 后续要通过subgraph判断
+
   if (tensor->name().find("lm_head") != std::string::npos
       || tensor->name().find("wte") != std::string::npos
       || tensor->name().find("wpe") != std::string::npos
-      || tensor->name().find("final") != std::string::npos) {
+      || tensor->name().find("final") != std::string::npos
+      || tensor->name().find("patch") != std::string::npos
+      || tensor->name().find("proj") != std::string::npos
+      || tensor->name().find("adaLN") != std::string::npos
+      || tensor->name().find("timestep_embedder") != std::string::npos
+      || tensor->name().find("conv1") != std::string::npos
+      || tensor->name().find("conv2") != std::string::npos 
+      || tensor->name().find("conv_in") != std::string::npos
+      || tensor->name().find("conv_shortcut") != std::string::npos){
     return 0;
   }
   std::string sub_str = "block";

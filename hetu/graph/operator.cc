@@ -114,6 +114,7 @@ void OpInterface::DoDeduceStatesHierarchy(const TensorList& inputs, TensorList& 
   graph.USE_HETERO_ID = true;
   for (size_t cur_hetero_id = 0; cur_hetero_id < hetero_size; cur_hetero_id++) {
     graph.CUR_HETERO_ID = cur_hetero_id;
+    std::cout << "start deduce states for " << op_meta.name << " hetero id " << cur_hetero_id << std::endl;
     DeduceStates(inputs, outputs, op_meta);
   }
   /*
@@ -237,8 +238,8 @@ NDArrayList OpInterface::DoAllocOutputs(Operator& op, const NDArrayList& inputs,
         auto output_id = op->output(i)->id();
         // HT_LOG_INFO << hetu::impl::comm::GetLocalDevice() << ": get runtime shape for " << op->output(i);
         const auto& output_shape = runtime_ctx.get_runtime_shape(output_id);
-        HT_LOG_TRACE << hetu::impl::comm::GetLocalDevice() << ": exec op " << op
-          << " output " << i << " shape = " << output_shape << " ds = " << op->output(i)->get_distributed_states().ds_info();
+        // HT_LOG_TRACE << hetu::impl::comm::GetLocalDevice() << ": exec op " << op
+          // << " output " << i << " shape = " << output_shape << " ds = " << op->output(i)->get_distributed_states().ds_info();
         if (runtime_ctx.has_runtime_allocation(output_id)) {
           // HT_LOG_INFO << op->output(i) << " has runtime allocation";
           outputs.push_back(runtime_ctx.get_runtime_allocation(output_id));

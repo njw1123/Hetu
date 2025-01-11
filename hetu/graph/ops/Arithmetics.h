@@ -375,6 +375,9 @@ public:
   HTShapeList DoInferShape(Operator& op, const HTShapeList& input_shapes,
                            RuntimeContext& runtime_ctx) const override;
 
+  void DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
+                                    TensorList& outputs, const OpMeta& op_meta) const override;
+                                  
   void DoCompute(Operator& op, const NDArrayList& inputs, NDArrayList& outputs,
                  RuntimeContext& ctx) const override;
 
@@ -572,6 +575,9 @@ class AddElewiseGradientOpImpl final : public BinaryGradientOpImpl {
 
   HTShapeList DoInferShape(Operator& op, const HTShapeList& input_shapes,
                            RuntimeContext& runtime_ctx) const override;
+
+  // void DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
+  //                                   TensorList& outputs, const OpMeta& op_meta) const override;
 
   void DoCompute(Operator& op, const NDArrayList& inputs, NDArrayList& outputs,
                  RuntimeContext& runtime_ctx) const override;
