@@ -565,27 +565,25 @@ class OpDef : public shared_ptr_target {
       << ", the inputs are " << this->inputs() << " and the input shapes are " << input_shapes << ", strides are " << input_strides;
     */
     // precision debug
-    /*
     NDArrayList input_sums;
     for (auto& input : inputs) {
       input_sums.push_back(NDArray::sum(input));
     }
     HT_LOG_INFO << hetu::impl::comm::GetLocalDevice() << " micro batch: " << micro_batch_id << ", compute op: " << name()
-      << ", the input vals are " << input_sums;
-    */
+      << ", inputs are " << _inputs << ", and the input vals are " << input_sums;
     instantiation_ctx().start[micro_batch_id]->Record(stream());
     auto rets = _body->Compute(get_self(), inputs, runtime_ctx);
     instantiation_ctx().stop[micro_batch_id]->Record(stream());
-    // stream().Sync();
+    stream().Sync();
     // precision debug
-    /*
+    
     NDArrayList ret_sums;
     for (auto& ret : rets) {
       ret_sums.push_back(NDArray::sum(ret));
     }
     HT_LOG_INFO << hetu::impl::comm::GetLocalDevice() << " micro batch: " << micro_batch_id << ", compute op: " << name()
       << ", the result is " << ret_sums;
-    */
+    
     // correctness debug
     /*
     HTShapeList ret_shapes, ret_strides;

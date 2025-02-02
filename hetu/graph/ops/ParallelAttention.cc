@@ -525,8 +525,8 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
     // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnCuda begin, q idx = " << q_idx << " and kv idx = " << kv_idx << ", q_slice is " << q_slice << " and k_slice (similar to v_slice) is " << k_slice;
     // 这里的softmax_lse与out都是一个block的局部的输出
     HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttn", hetu::impl::FlashAttn,
-                                 q_slice, k_slice, v_slice, out, empty_ndarray,
-                                 empty_ndarray, empty_ndarray, empty_ndarray, softmax_lse,
+                                 q_slice, k_slice, v_slice, out, q_slice,
+                                 k_slice, v_slice, out, softmax_lse,
                                  empty_ndarray, rng_state, _p_dropout, _softmax_scale,
                                  is_causal, false, Stream(_local_device, _stream_idx));
     // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnCuda end, out is " << out;
@@ -972,6 +972,7 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
     << "ParallelFlashAttention forward only supports head dimension at most 256 and must be divided by 8";
   auto stream_idx = op->instantiation_ctx().stream_index;
   auto reshaped_qkv = NDArray::view(qkv, {batch_size, seq_len, total_num_heads, _head_dim});
+  HT_LOG_WARN << op << " reshaped_qkv shape is " << reshaped_qkv->shape() << ", sum is " << NDArray::sum(reshaped_qkv) << ", data is " << reshaped_qkv;
   auto reshaped_output = NDArray::view(output, {batch_size, seq_len, q_num_heads, _head_dim});
   // self-attn
   HTShape q_shape = {batch_size, seq_len, q_num_heads, _head_dim};

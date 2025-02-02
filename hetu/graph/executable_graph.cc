@@ -950,6 +950,7 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
       NDArray input_val;
       if (_preserved_data.find(input->id()) != _preserved_data.end()) {
         input_val = _preserved_data[input->id()];
+        // HT_LOG_INFO << "fetch " << input << " from _preserved_data, sum is " << NDArray::sum(input_val);
         // 如果有一些_preserved_data是switch过来的
         // 那么我们这里进行实际的sync
         auto event_it = _switch_param_events.find(input->id());
