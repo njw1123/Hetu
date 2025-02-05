@@ -231,6 +231,7 @@ void AttnCommRing::PrepareKVBlocks(const NDArray& local_k, const NDArray& local_
   // 最一开始拥有的local的kv映射到0号storage上
   // 下一轮即将获得的映射到1号storage上
   // 依次类推
+  // 因此需要注意每个rank的视角下同一个编号的storage并不一定对应同一群block
   int64_t cur_storage_idx = 0;
   int64_t cur_block_idx = _ring_idx;
   HT_ASSERT(_kv_block_to_storage_map.empty())
@@ -323,7 +324,15 @@ void AttnCommRing::PrepareKVBlocks(const NDArray& local_k, const NDArray& local_
                                                        HTShape{_batch_size * 2, _seq_len_list.at(_ring_idx), _kv_num_heads, _head_dim});
     _final_next_kv_block->bind_attn_storage(_kv_storage_list.at(final_next_storage_idx));
   }
-  // 将初始时的local kv放入到对应的ring buffer中
+  // 初始化ring buffer的数值
+  // 首先如果含有acc_dk和acc_dv需要全部置0
+  if (piggyback_grad) {
+    for (size_t i = 0; i < _kv_storage_size; i++) {
+      auto acc_dkv = _kv_block_list[(_ring_idx + i) % _ring_size]->get_4d_acc_dkv();
+      NDArray::full_(acc_dkv, 0, _stream_idx);
+    }
+  }
+  // 其次要将初始时的local kv放入到对应的ring buffer中
   auto block_local_k = _kv_block_list[_ring_idx]->get_4d_k();
   auto block_local_v = _kv_block_list[_ring_idx]->get_4d_v();
   NDArray::contiguous(local_k, _stream_idx, block_local_k);
@@ -401,8 +410,10 @@ void AttnCommRing::PrepareStorageBwd(const std::shared_ptr<AttnCtx>& attn_ctx, c
   // 同时piggyback下一轮的acc_dk与acc_dv
   PrepareKVBlocks(local_k, local_v, false, true);
   // 3、分配grad_output和_acc_dq
+  // _acc_dq需要置零
   _grad_output = grad_output;
   _acc_dq = local_dq;
+  NDArray::full_(_acc_dq, 0, _stream_idx);
   // 4、分配临时的dq、dk和dv的storage
   // 这里按最长的seq_len去分配
   // 目前走mempool临时去分配
