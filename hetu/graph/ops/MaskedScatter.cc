@@ -21,7 +21,13 @@ void MaskedScatterOpImpl::DoCompute(Operator& op,
 NDArrayList MaskedScatterOpImpl::DoCompute(Operator& op,
                                                const NDArrayList& inputs,
                                                RuntimeContext& ctx) const {
-  NDArrayList outputs = inplace() ? inputs : DoAllocOutputs(op, inputs, ctx);
+                                          
+  NDArrayList outputs;
+  if (inplace()) {
+      outputs.push_back(inputs.at(0));
+  } else {
+      outputs = DoAllocOutputs(op, inputs, ctx);
+  }
   DoCompute(op, inputs, outputs, ctx);
   return outputs;
 }

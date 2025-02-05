@@ -50,6 +50,7 @@ def _add_training_args(parser):
     group.add_argument("--adam_weight_decay", type=float, default=0.01, help="weight_decay of adam")
     group.add_argument("--seed", type=int, default=12345, help="random seed for reproducibility")
     group.add_argument("--bf16", action="store_true", help="use bfloat16")
+    group.add_argument("--torch_profile", type=int, default=0, help="use pytorch profiler")
     return parser
 
 def _add_distributed_args(parser):

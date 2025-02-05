@@ -171,6 +171,8 @@ void DefineAndRunGraph::DeducePipeline(size_t compute_strategy_id, int32_t pipel
   // 因此实际上其取决于最小的dup
   // 其本质是除了dup外就是split而split一定不能使用不同的feed dict的data
   // 因此做split的参数最终一定要求是在同一个pipeline中
+  pipeline_num = std::numeric_limits<int32_t>::min();
+
   for (const auto& op : _ops_with_device_group_hierarchy) {
     // deduce pipeline的stages时只需要用到模型的parameters
     if (_parameter_ops.find(op->id()) == _parameter_ops.end()) {
@@ -179,6 +181,7 @@ void DefineAndRunGraph::DeducePipeline(size_t compute_strategy_id, int32_t pipel
     auto& dg_union = op->device_group_union();
     // auto& ds_union = op->output(0)->cur_ds_union(); // 需要使用zero之前的
     auto before_zero_it = _ds_hierarchy_before_zero.find(op->output(0)->id());
+    HT_ASSERT(before_zero_it != _ds_hierarchy_before_zero.end()) << "cannot find the ds hierarchy of " << " before zero";
     HT_ASSERT(before_zero_it != _ds_hierarchy_before_zero.end())
       << "cannot find the ds hierarchy of " << op->input(0)->producer() << " before zero"
       << ", note no zero should also have it";
@@ -187,79 +190,29 @@ void DefineAndRunGraph::DeducePipeline(size_t compute_strategy_id, int32_t pipel
     HT_ASSERT(dg_union.size() != 0 && ds_union.size() != 0 && dg_union.size() == ds_union.size())
       << "dg union & ds union of " << op << " shouldn't be empty and should have the same size";
     int32_t union_size = static_cast<int32_t>(dg_union.size());
-    int32_t dup_size = -1;
-    bool is_hetero = union_size > 1;
-    // hetero情况
-    if (is_hetero) {
-      HT_ASSERT(ds_union.hetero_dim() == -1)
-        << "Now onlt support param hetero on dup (-1)";
-      for (size_t i = 0; i < union_size; i++) {
-        auto& ds = ds_union.get(i);
-        auto ds_dup = ds.states(-1);
-        if (ds_dup != 1) {
-          HT_LOG_WARN_IF(ds.order(0) != -1) 
-            << op << " is a parameter, which is suggested to put dup at the first position in the ds order sequence"
-            << ", but now the ds is: " << ds.ds_info();
-        }
-      }
-      dup_size = union_size;
-    } 
-    // homo情况
-    else {
-      dup_size = ds_union.get(0).get_dim(-1);
+    pipeline_num = std::max(pipeline_num, union_size);
+  }
+
+  for (const auto& op : _ops_with_device_group_hierarchy) {
+    // deduce pipeline的stages时只需要用到模型的parameters
+    if (_parameter_ops.find(op->id()) == _parameter_ops.end()) {
+      continue;
     }
-    HT_ASSERT(dup_size % pipeline_num == 0 && dup_size >= pipeline_num)
-      << "dup size should be divided by the number of pipelines";
-    // 相邻merge_ratio个dup算在一个pipeline里
-    size_t merge_ratio = dup_size / pipeline_num;
+    auto& dg_union = op->device_group_union();
+    int pipeline_num_now = dg_union.size();
     std::vector<std::vector<Device>> stages(pipeline_num);
-    // 不存在异构dp
-    // 即union中只有一个
-    // 默认在dup维度均分几条pipeline
-    if (!is_hetero) {
-      auto& ds = ds_union.get(0);
-      auto& device_group = dg_union.get(0);
-      for (int32_t i = 0; i < device_group.num_devices(); i++) {
-        auto state_index = ds.map_device_to_state_index(i);
-        int32_t dup_idx = dup_size == 1 ? 0 : state_index[-1];
-        int32_t pipeline_idx = dup_idx / merge_ratio;
+    for (size_t i = 0; i < pipeline_num; i++) {      
+      auto& device_group = dg_union.get(i % pipeline_num_now);
+      for (const auto& device : device_group.devices()) {
         // 记录device到pipeline的映射
-        if (device_to_pipeline_idx_map.find(device_group.get(i)) != device_to_pipeline_idx_map.end()) {
-          HT_ASSERT(device_to_pipeline_idx_map[device_group.get(i)] == pipeline_idx)
-            << "device " << device_group.get(i) << " is in two pipelines, which will cause chaos"
-            << ", the existing pipeline is " << device_to_pipeline_idx_map[device_group.get(i)]
-            << " and the new pipeline is " << pipeline_idx; 
-        } else {
-          device_to_pipeline_idx_map[device_group.get(i)] = pipeline_idx;
+        if(device_to_pipeline_idx_map.find(device) == device_to_pipeline_idx_map.end()){
+          device_to_pipeline_idx_map[device] = i;
         }
         // 添加device到新的stage
-        stages[pipeline_idx].emplace_back(device_group.get(i));
+        stages[i].emplace_back(device);  
       }
     }
-    // 存在异构
-    // union中每个device group本质上就是一个stage
-    // 当然还要考虑相邻dup进行merge的情形
-    else {
-      for (size_t i = 0; i < pipeline_num; i++) {
-        for (size_t j = 0; j < merge_ratio; j++) {
-          auto& device_group = dg_union.get(i * merge_ratio + j);
-          for (const auto& device : device_group.devices()) {
-            // 记录device到pipeline的映射
-            if (device_to_pipeline_idx_map.find(device) != device_to_pipeline_idx_map.end()) {
-              HT_ASSERT(device_to_pipeline_idx_map[device] == i)
-                << "device " << device << " is in two pipelines, which will cause chaos"
-                << ", the existing pipeline is " << device_to_pipeline_idx_map[device]
-                << " and the new pipeline is " << i; 
-            } else {
-              device_to_pipeline_idx_map[device] = i;
-            }
-            // 添加device到新的stage
-            stages[i].emplace_back(device);  
-          }
-        }
-      }
-    }
-    // 添加各个stage到各个pipeline
+    std::cout << "op " << op << " " << dg_union << std::endl;
     for (size_t i = 0; i < pipeline_num; i++) {
       if (!stages[i].empty()) {
         auto cur_stage_device_group = DeviceGroup(stages[i]);
@@ -276,6 +229,7 @@ void DefineAndRunGraph::DeducePipeline(size_t compute_strategy_id, int32_t pipel
       }
     }
   }
+
   // 记录当前strategy下的device到pipeline映射
   for (const auto& kv : device_to_pipeline_idx_map) {
     const auto& device = kv.first;
@@ -1234,7 +1188,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
     int32_t pipeline_num = 0;
     if (!loss->cur_ds_union().is_hetero()) {
       pipeline_num = loss->cur_ds_union().get(0).states(-2);
-    } else if (loss->cur_ds_union().hetero_dim() == -2) {
+    } else if (loss->cur_ds_union().hetero_dim() == 0) {
       pipeline_num = loss->cur_ds_union().size();
     } else {
       HT_RUNTIME_ERROR << "Currently we use the ds of loss to deduce pipeline num"

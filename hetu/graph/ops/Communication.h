@@ -94,6 +94,9 @@ class CommOpImpl final: public OpInterface {
     return COMM_OP;
   }  
 
+  void DeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
+                       TensorList& outputs, const OpMeta& op_meta) const;
+
  protected:
   bool DoMapToParallelDevices(Operator& op,
                               const DeviceGroupUnion& pg_union) const override;
@@ -109,8 +112,12 @@ class CommOpImpl final: public OpInterface {
   void DoDeduceStates(const TensorList& inputs, TensorList& outputs, 
                       const OpMeta& op_meta) const override;
 
-  void DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
+
+  inline void DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
                          TensorList& outputs, const OpMeta& op_meta) const override;  
+
+  void DoDeduceStatesHierarchy(const TensorList& inputs, TensorList& outputs, 
+                                        const OpMeta& op_meta, Graph& graph) const override;
 
   TensorList DoGradient(Operator& op,
                         const TensorList& grad_outputs) const override;
@@ -126,6 +133,16 @@ class CommOpImpl final: public OpInterface {
     return _dst_ds_hierarchy;
   }
 
+  const DistributedStatesUnion& get_dst_ds_union(Graph& graph) const {
+    HT_ASSERT(_dst_ds_hierarchy.size() == 1 || _dst_ds_hierarchy.size() == graph.NUM_STRATEGY)
+      << "CommOp get dst ds error!";
+    if (_dst_ds_hierarchy.size() == 1) { // for comm op created in exec_graph, without multi ds
+      return _dst_ds_hierarchy.get(0);
+    } else { // for comm op created in define_and_run_graph, with multi ds
+      return _dst_ds_hierarchy.get(graph.CUR_STRATEGY_ID);
+    }
+  }
+  
   const DistributedStatesUnion& get_dst_ds_union(Operator& op) const {
     auto& graph = op->graph();
     HT_ASSERT(_dst_ds_hierarchy.size() == 1 || _dst_ds_hierarchy.size() == graph.NUM_STRATEGY)
@@ -173,7 +190,9 @@ class CommOpImpl final: public OpInterface {
   const DeviceGroupHierarchy& dst_group_hierarchy() {
     return _dst_group_hierarchy;
   }
-  
+
+
+
   // only used in exec graph
   const DeviceGroupUnion& get_src_group_union(Operator& op) const {
     HT_ASSERT(op->graph().type() == GraphType::EXECUTABLE && op->input(0)->has_placement_group())

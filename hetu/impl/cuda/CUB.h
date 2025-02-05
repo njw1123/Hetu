@@ -93,9 +93,9 @@ inline void exclusive_scan(InputIteratorT input, OutputIteratorT output, ScanOpT
     size_t temp_storage_bytes = 0;    
 
     hetu::cuda::CUDADeviceGuard guard(stream.device_index());
-    CUDA_CALL(cub::DeviceScan::InclusiveScan(nullptr, temp_storage_bytes, input, output, scan_op, size_cub, cuda_stream));
+    CUDA_CALL(cub::DeviceScan::ExclusiveScan(nullptr, temp_storage_bytes, input, output, scan_op, init_value, size_cub, cuda_stream));
     NDArray temp_storage = NDArray::empty({(int64_t)temp_storage_bytes}, stream.device(), kInt8, stream.stream_index());
-    CUDA_CALL(cub::DeviceScan::InclusiveScan(temp_storage->data_ptr<void>(), temp_storage_bytes, input, output, scan_op, size_cub, cuda_stream));
+    CUDA_CALL(cub::DeviceScan::ExclusiveScan(temp_storage->data_ptr<void>(), temp_storage_bytes, input, output, scan_op, init_value, size_cub, cuda_stream));
 
     NDArray::MarkUsedBy({temp_storage}, stream);
     return;

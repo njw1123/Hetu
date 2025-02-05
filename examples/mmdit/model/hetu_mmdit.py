@@ -34,7 +34,7 @@ class PatchEmbed(ht.nn.Module):
         self.embed_dim = config.hidden_size
 
         kernel_size = self.patch_size
-        self.proj = ht.nn.HtParallelConv2d(in_channels = self.in_channels, 
+        self.proj = ht.nn.HtParallelConv3d(in_channels = self.in_channels, 
                                    out_channels = self.embed_dim, 
                                    kernel_size = kernel_size, 
                                    stride=kernel_size, 
@@ -78,7 +78,7 @@ class TimestepEmbedder(ht.nn.Module):
             self.embed_dim,
             self.embed_dim,
             get_multi_ds_parallel_config(ds_parallel_configs, 'linear2'),
-            sp=False,
+            sequence_parallel=False,
             bias=self.add_bias,
             name=f'rowp_{name}'
             # init_method=output_layer_init_method
@@ -126,7 +126,7 @@ class FinalLayer(ht.nn.Module):
         self.ds_parallel_configs = ds_parallel_configs
         self.embed_dim = config.hidden_size
 
-        self.final_norm = ht.nn.HtMultiParallelLayerNorm(self.embed_dim, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm_final'), sp=False, name='rmsnorm_final')
+        self.final_norm = ht.nn.HtMultiParallelLayerNorm(self.embed_dim, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm_final'), sequence_parallel=False, name='rmsnorm_final')
 
         self.final_linear = ht.nn.HtMultiColumnParallelLinear(
             config.hidden_size,
@@ -171,7 +171,7 @@ class TextEmbedder(ht.nn.Module):
             self.embed_dim,
             self.embed_dim,
             get_multi_ds_parallel_config(ds_parallel_configs, 'linear2'),
-            sp=False,
+            sequence_parallel=False,
             bias=self.add_bias,
             name=f'rowp_{name}'
             # init_method=output_layer_init_method
@@ -203,7 +203,7 @@ class TextEmbedder(ht.nn.Module):
 
 # self-attn
 class MMDiTAttention(ht.nn.Module):
-    def __init__(self, config, ds_parallel_configs, layer_idx, name='attn'):
+    def __init__(self, config, ds_parallel_configs, layer_idx, is_last_layer=False, name='attn'):
         super().__init__()
 
         self.config = config
@@ -211,6 +211,7 @@ class MMDiTAttention(ht.nn.Module):
         self.use_flash_attn = config.use_flash_attn
         # self.add_bias = True
         self.add_bias = False
+        self.lasy_layer = is_last_layer
 
         # max_positions = config.max_position_embeddings
         # self.bias = np.tril(np.ones((max_positions, max_positions), dtype=np.int64).reshape(
@@ -246,7 +247,7 @@ class MMDiTAttention(ht.nn.Module):
             self.embed_dim,
             self.embed_dim,
             get_multi_ds_parallel_config(ds_parallel_configs, 'dense', layer_idx),
-            sp=False,
+            sequence_parallel=False,
             bias=self.add_bias,
             name=f'rowp_{name}'
         )
@@ -259,15 +260,18 @@ class MMDiTAttention(ht.nn.Module):
             gather_output=False,
             name=f'colp_{name}_context'
         )
+        
+        if not self.lasy_layer:
+            self.dense_context = ht.nn.HtMultiRowParallelLinear(
+                self.embed_dim,
+                self.embed_dim,
+                get_multi_ds_parallel_config(ds_parallel_configs, 'dense', layer_idx),
+                sequence_parallel=False,
+                bias=self.add_bias,
+                name=f'rowp_{name}_context'
+            )
 
-        self.dense_context = ht.nn.HtMultiRowParallelLinear(
-            self.embed_dim,
-            self.embed_dim,
-            get_multi_ds_parallel_config(ds_parallel_configs, 'dense', layer_idx),
-            sp=False,
-            bias=self.add_bias,
-            name=f'rowp_{name}_context'
-        )
+        print("over")
 
 
         # self.attn_dropout = ht.nn.Dropout(config.attn_pdrop)
@@ -297,7 +301,9 @@ class MMDiTAttention(ht.nn.Module):
         qkv_context = qkv_context.reshape([ht.IntSymbol(-1), self.config.text_seq_len_symbol, ht.IntSymbol(self.num_heads), ht.IntSymbol(3 * self.head_dim)])
         query_context, key_context, value_context = ht.split(qkv_context, 3, qkv_context.ndim - 1)
 
-
+        print("query shape ", query.shape, query.ds_hierarchy)
+        print("query_context shape ", query_context.shape, query_context.ds_hierarchy)
+        print("key shape ", key.shape, key.ds_hierarchy)
         query_combined = ht.concat(query, query_context, axis=1)
         key_combined = ht.concat(key, key_context, axis=1)
         value_combined = ht.concat(value, value_context, axis=1)
@@ -312,12 +318,15 @@ class MMDiTAttention(ht.nn.Module):
 
         attn_output_hidden_satates = attn_output_hidden_satates.reshape([ht.IntSymbol(-1), ht.IntSymbol(self.num_heads * self.head_dim)])
         attn_output = self.dense(attn_output_hidden_satates)
-        attn_output_hidden_satates = attn_output_hidden_satates.reshape([ht.IntSymbol(hidden_states_batch_size), ht.IntSymbol(hidden_states_seq_len), ht.IntSymbol(self.num_heads * self.head_dim)])
+        attn_output = attn_output.reshape([ht.IntSymbol(hidden_states_batch_size), ht.IntSymbol(hidden_states_seq_len), ht.IntSymbol(self.num_heads * self.head_dim)])
 
 
-        attn_output_context = ht.reshape(attn_output_context, [ht.IntSymbol(-1), ht.IntSymbol(self.num_heads * self.head_dim)])
-        attn_output_context = self.dense_context(attn_output_context)
-        attn_output_context = attn_output_context.reshape([ht.IntSymbol(encoder_hidden_states_batch_size), ht.IntSymbol(encoder_hidden_states_seq_len), ht.IntSymbol(self.num_heads * self.head_dim)])
+        if not self.lasy_layer:
+            attn_output_context = ht.reshape(attn_output_context, [ht.IntSymbol(-1), ht.IntSymbol(self.num_heads * self.head_dim)])
+            attn_output_context = self.dense_context(attn_output_context)
+            attn_output_context = attn_output_context.reshape([ht.IntSymbol(encoder_hidden_states_batch_size), ht.IntSymbol(encoder_hidden_states_seq_len), ht.IntSymbol(self.num_heads * self.head_dim)])
+        else:
+            attn_output_context = attn_output_context.reshape([ht.IntSymbol(encoder_hidden_states_batch_size), ht.IntSymbol(encoder_hidden_states_seq_len), ht.IntSymbol(self.num_heads * self.head_dim)])
 
         # dropout
         # attn_output = self.resid_dropout(attn_output)
@@ -355,7 +364,7 @@ class ParallelMLP(ht.nn.Module):
             config.ffn_hidden_size,
             config.hidden_size,
             get_multi_ds_parallel_config(ds_parallel_configs, 'dense_4h_to_h', layer_idx),
-            sp=False,
+            sequence_parallel=False,
             bias=self.add_bias,
             name=f'rowp_{name}'
             # init_method=output_layer_init_method
@@ -386,31 +395,32 @@ class MMDiTMLP(ht.nn.Module):
 
     def forward(self, hidden_states):
         # origin_shape = hidden_states.global_shape # [b * seq_len, hidden_size]
-        # assert len(origin_shape) == 2, "sp: all is 2 dim matmul"
+        # assert len(origin_shape) == 2, "sequence_parallel: all is 2 dim matmul"
         hidden_states = self.parallel_mlp(hidden_states)
         return hidden_states
 
 
 class MMDitBlock(ht.nn.Module):
 
-    def __init__(self, config, ds_parallel_configs, layer_idx):
+    def __init__(self, config, ds_parallel_configs, layer_idx, is_last_layer):   
         super(MMDitBlock, self).__init__()
         self.config = config
         self.ds_parallel_configs = ds_parallel_configs
         self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
+        self.is_last_layer = is_last_layer
 
         # sequence parallel: layernorm前做reduce-scatter(这一部分由row prallel的reduce-scatter完成); layernorm后做allgather
-        self.rmsnorm_1 = ht.nn.HtMultiParallelLayerNorm(self.hidden_size, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm1', layer_idx), sp=False, name=f'rmsnorm1_block{layer_idx}')
-        self.attn = MMDiTAttention(config, get_multi_ds_parallel_config(ds_parallel_configs, "attn", layer_idx), layer_idx=layer_idx, name=f'attn_block{layer_idx}')
-        self.rmsnorm_2 = ht.nn.HtMultiParallelLayerNorm(self.hidden_size, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm2', layer_idx), sp=False, name=f'rmsnorm2_block{layer_idx}')
+        self.rmsnorm_1 = ht.nn.HtMultiParallelLayerNorm(self.hidden_size, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm1', layer_idx), sequence_parallel=False, name=f'rmsnorm1_block{layer_idx}')
+        self.attn = MMDiTAttention(config, get_multi_ds_parallel_config(ds_parallel_configs, "attn", layer_idx), layer_idx=layer_idx, is_last_layer=is_last_layer, name=f'attn_block{layer_idx}')
+        self.rmsnorm_2 = ht.nn.HtMultiParallelLayerNorm(self.hidden_size, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm2', layer_idx), sequence_parallel=False, name=f'rmsnorm2_block{layer_idx}')
         self.mlp = MMDiTMLP(config, get_multi_ds_parallel_config(ds_parallel_configs, "mlp", layer_idx), layer_idx=layer_idx, name=f'mlp_block{layer_idx}')
 
 
-        self.rmsnorm_1_context = ht.nn.HtMultiParallelLayerNorm(self.hidden_size, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm1', layer_idx), sp=False, name=f'rmsnorm1_context_block{layer_idx}')
-        self.attn_context = MMDiTAttention(config, get_multi_ds_parallel_config(ds_parallel_configs, "attn", layer_idx), layer_idx=layer_idx, name=f'attn_context_block{layer_idx}')
-        self.rmsnorm_2_context = ht.nn.HtMultiParallelLayerNorm(self.hidden_size, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm2', layer_idx), sp=False, name=f'rmsnorm2_context_block{layer_idx}')
-        self.mlp_context = MMDiTMLP(config, get_multi_ds_parallel_config(ds_parallel_configs, "mlp", layer_idx), layer_idx=layer_idx, name=f'mlp_context_block{layer_idx}')
+        self.rmsnorm_1_context = ht.nn.HtMultiParallelLayerNorm(self.hidden_size, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm1', layer_idx), sequence_parallel=False, name=f'rmsnorm1_context_block{layer_idx}')
+        if not self.is_last_layer:
+            self.rmsnorm_2_context = ht.nn.HtMultiParallelLayerNorm(self.hidden_size, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm2', layer_idx), sequence_parallel=False, name=f'rmsnorm2_context_block{layer_idx}')
+            self.mlp_context = MMDiTMLP(config, get_multi_ds_parallel_config(ds_parallel_configs, "mlp", layer_idx), layer_idx=layer_idx, name=f'mlp_context_block{layer_idx}')
 
         self.adaLN_modulation_linear = ht.nn.HtMultiColumnParallelLinear(
             self.hidden_size,
@@ -422,15 +432,26 @@ class MMDitBlock(ht.nn.Module):
             # skip_bias_add=True
         )
 
-        self.adaLN_modulation_linear_context = ht.nn.HtMultiColumnParallelLinear(
-            self.hidden_size,
-            self.hidden_size * 6,
-            get_multi_ds_parallel_config(ds_parallel_configs, 'adaLN_modulation_linear'),
-            bias=self.add_bias,
-            gather_output=True,
-            name=f'adaLN_modulation_linear_context'
-            # skip_bias_add=True
-        )
+        if self.is_last_layer:
+            self.adaLN_modulation_linear_context = ht.nn.HtMultiColumnParallelLinear(
+                self.hidden_size,
+                self.hidden_size * 2,
+                get_multi_ds_parallel_config(ds_parallel_configs, 'adaLN_modulation_linear'),
+                bias=self.add_bias,
+                gather_output=True,
+                name=f'adaLN_modulation_linear_context'
+                # skip_bias_add=True
+            )            
+        else:
+            self.adaLN_modulation_linear_context = ht.nn.HtMultiColumnParallelLinear(
+                self.hidden_size,
+                self.hidden_size * 6,
+                get_multi_ds_parallel_config(ds_parallel_configs, 'adaLN_modulation_linear'),
+                bias=self.add_bias,
+                gather_output=True,
+                name=f'adaLN_modulation_linear_context'
+                # skip_bias_add=True
+            )
     
 
     
@@ -441,17 +462,24 @@ class MMDitBlock(ht.nn.Module):
         temb
     ):
         
+        print("hidden_states block", hidden_states.shape, hidden_states.ds_hierarchy)
         adaLN_modulation_output = ht.silu(self.adaLN_modulation_linear(temb))
+        
+        print("adaLN_modulation_output", adaLN_modulation_output.shape)
+        
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = ht.split(adaLN_modulation_output, num_chunks=6, dim=1)
 
         adaLN_modulation_output_context = ht.silu(self.adaLN_modulation_linear_context(temb))
-        shift_msa_context, scale_msa_context, gate_msa_context, shift_mlp_context, scale_mlp_context, gate_mlp_context = ht.split(adaLN_modulation_output_context, num_chunks=6, dim=1)
+        if not self.is_last_layer:
+            shift_msa_context, scale_msa_context, gate_msa_context, shift_mlp_context, scale_mlp_context, gate_mlp_context = ht.split(adaLN_modulation_output_context, num_chunks=6, dim=1)
+        else:
+            shift_msa_context, scale_msa_context,  = ht.split(adaLN_modulation_output_context, num_chunks=2, dim=1)
 
-        
-        print("1111")
 
         residual = hidden_states
+        print("before rmsnorm_1 hidden_states shape ", hidden_states.shape, hidden_states.ds_hierarchy)
         hidden_states = self.rmsnorm_1(hidden_states)
+        print("hidden_states shape ", hidden_states.shape, hidden_states.ds_hierarchy)
 
         residual_context = encoder_hidden_states
         encoder_hidden_states = self.rmsnorm_1_context(encoder_hidden_states)
@@ -469,11 +497,14 @@ class MMDitBlock(ht.nn.Module):
         print("gate_msa shape ", gate_msa.shape, gate_msa.ds_hierarchy)
         print("residual shape ", residual.shape, residual.ds_hierarchy)
 
-        hidden_states = modulate(hidden_states, residual, gate_msa, False, True)
+        hidden_states = modulate(attn_output, residual, gate_msa, False, True)
         
         print("3333")
 
-        encoder_hidden_states = modulate(encoder_hidden_states, residual_context, gate_msa_context, False, True)
+        if not self.is_last_layer:
+            encoder_hidden_states = modulate(attn_output_context, residual_context, gate_msa_context, False, True)
+        else:
+            encoder_hidden_states = attn_output_context
 
         # gate_msa = gate_msa.reshape([gate_msa.global_shape[0], -1, gate_msa.global_shape[1]])
         # attn_output = attn_output.reshape([gate_msa.global_shape[0], -1, attn_output.global_shape[1]])
@@ -489,46 +520,23 @@ class MMDitBlock(ht.nn.Module):
         
         residual = hidden_states
         hidden_states = self.rmsnorm_2(hidden_states)
-
-        residual_context = encoder_hidden_states
-        encoder_hidden_states = self.rmsnorm_2_context(encoder_hidden_states)
-
         mlp_output = self.mlp(
             modulate(hidden_states, shift_mlp, scale_mlp)
         )
-        mlp_output_context = self.mlp_context(
-            modulate(encoder_hidden_states, shift_mlp_context, scale_mlp_context)
-        )
-
-
-
-        # gate_mlp = gate_mlp.reshape([gate_mlp.global_shape[0], -1, gate_mlp.global_shape[1]])
-        # mlp_output = mlp_output.reshape([gate_mlp.global_shape[0], -1, mlp_output.global_shape[1]])
-        # hidden_states = gate_mlp * mlp_output
-        # hidden_states = hidden_states.reshape([-1, hidden_states.global_shape[2]])
-        # hidden_states = residual + hidden_states
-
-        print("mlp_output shape ", mlp_output.shape, mlp_output.ds_hierarchy)
-        print("gate_mlp shape ", gate_mlp.shape, gate_mlp.ds_hierarchy)
-        print("residual shape ", residual.shape, residual.ds_hierarchy)
-
-
         hidden_states = modulate(mlp_output, residual, gate_mlp, False, True)
-        
-
-        encoder_hidden_states = modulate(mlp_output_context, residual_context, gate_mlp_context, False, True)
-
-        # gate_mlp_context = gate_mlp_context.reshape([gate_mlp_context.global_shape[0], -1, gate_mlp_context.global_shape[1]])
-        # mlp_output_context = mlp_output_context.reshape([gate_mlp_context.global_shape[0], -1, mlp_output_context.global_shape[1]])
-        # encoder_hidden_states = gate_mlp_context * mlp_output_context
-        # encoder_hidden_states = encoder_hidden_states.reshape([-1, encoder_hidden_states.global_shape[2]])
-        # encoder_hidden_states = residual_context + encoder_hidden_states
 
 
-        print("4444")
 
-        # hidden_states = residual + gate_mlp * mlp_output
-        # encoder_hidden_states = residual_context + gate_mlp_context * mlp_output_context
+        if not self.is_last_layer:
+            residual_context = encoder_hidden_states
+            encoder_hidden_states = self.rmsnorm_2_context(encoder_hidden_states)
+            mlp_output_context = self.mlp_context(
+                modulate(encoder_hidden_states, shift_mlp_context, scale_mlp_context)
+            )
+            encoder_hidden_states = modulate(mlp_output_context, residual_context, gate_mlp_context, False, True)
+        else:
+            encoder_hidden_states = encoder_hidden_states
+
 
         return hidden_states, encoder_hidden_states
 
@@ -548,7 +556,8 @@ class MMDiTModel(ht.nn.Module):
 
         blocks = []
         for i in range(config.num_hidden_layers):
-            blocks.append(MMDitBlock(config, get_multi_ds_parallel_config(ds_parallel_configs, f'blocks{i}'), layer_idx=i))
+            is_last_layer = i == config.num_hidden_layers - 1
+            blocks.append(MMDitBlock(config, get_multi_ds_parallel_config(ds_parallel_configs, f'blocks{i}'), layer_idx=i, is_last_layer=is_last_layer))
         self.h = ht.nn.ModuleList(blocks)
 
         self.final_layer = FinalLayer(config, get_multi_ds_parallel_config(ds_parallel_configs, 'final_layer'))       
@@ -573,8 +582,8 @@ class MMDiTModel(ht.nn.Module):
         print("encoder_hidden_states shape ", encoder_hidden_states.shape, encoder_hidden_states.ds_hierarchy)
 
 
-        sp = False
-        if sp:
+        sequence_parallel = False
+        if sequence_parallel:
             ds_hierarchy_input = hidden_states.ds_hierarchy
             ds_hierarchy_output = []
             for ds_union_input in ds_hierarchy_input:
@@ -582,9 +591,9 @@ class MMDiTModel(ht.nn.Module):
                 for ds_input in ds_union_input.ds_list:
                     ds_split0 = ht.DistributedStates(ds_input.device_num, {0: ds_input.device_num}, [0])
                     assert ds_union_input.hetero_dim == -3 or ds_union_input.hetero_dim == 0, \
-                        "Workaround: sp assume input only hetero on split0"
+                        "Workaround: sequence_parallel assume input only hetero on split0"
                     assert ds_input.device_num == ds_input.get_dim(0) * ds_input.get_dim(-1), \
-                        "Workaround: sp assume input only split in dimension 0 for dp"
+                        "Workaround: sequence_parallel assume input only split in dimension 0 for dp"
                     ds_list_split0.append(ds_split0)
                 ds_hierarchy_output.append(ht.DistributedStatesUnion(ds_list_split0, 0 if ds_union_input.hetero_dim != -3 else -3))
             # [b * seq_len // tp, embed_dim]
@@ -600,14 +609,15 @@ class MMDiTModel(ht.nn.Module):
             # hetero需要显示地插入通信算子
             if i != len(self.h) - 1:
                 next_block = self.h[i + 1]
-                if next_block.rmsnorm_1.sp:
+                if next_block.rmsnorm_1.sequence_parallel:
                     hidden_states = ht.comm(hidden_states, next_block.rmsnorm_1.ds_union_map['split0'], next_block.rmsnorm_1.device_group_unions, name=f"pipeline_layer_{i}_comm")
                     encoder_hidden_states = ht.comm(encoder_hidden_states, next_block.rmsnorm_1.ds_union_map['split0'], next_block.rmsnorm_1.device_group_unions, name=f"pipeline_layer_{i}_comm")
                 else:
                     hidden_states = ht.comm(hidden_states, next_block.attn.qkv_dense.ds_union_map['split0_dup'], next_block.rmsnorm_1.device_group_unions, name=f"pipeline_layer_{i}_comm")
                     encoder_hidden_states = ht.comm(encoder_hidden_states, next_block.attn.qkv_dense.ds_union_map['split0_dup'], next_block.rmsnorm_1.device_group_unions, name=f"pipeline_layer_{i}_comm")
-
+        print("before final layer hidden_states shape ", hidden_states.shape, hidden_states.ds_hierarchy)
         hidden_states = self.final_layer(hidden_states, temb)
+        print("after final layer hidden_states shape ", hidden_states.shape, hidden_states.ds_hierarchy)
         # x = self.unpatchify(x)
         return hidden_states
 

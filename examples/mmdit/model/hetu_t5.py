@@ -70,59 +70,24 @@ class LLamaAttention(ht.nn.Module):
         attention_mask=None,
     ):
         # column parallel, [micro_batch_size * seq_len, 3 * embed_dim]
+        
+
         qkv = self.qkv_dense(hidden_states)
 
-        '''
-        # apply relative positional encoding (rotary embedding)
-        # TODO: 支持动态seq_len
-        def apply_rotary_pos_emb(x, _name='q'):
-            cos_np, sin_np = generate_cos_sin(self.config.seq_len_symbol.data, int(0.5 * self.head_dim), np.float32)
-            device_group_hierarchy = self.qkv_dense.device_group_unions
-            ds_hierarchy = self.dense.ds_union_map['dup']
-            # 去除zero
-            ds_hierarchy = [
-                ht.DistributedStatesUnion([ht.DistributedStates(ds.device_num, {-1: ds.device_num}, [-1]) for ds in ds_union.ds_list], ds_union.hetero_dim)
-                    for ds_union in ds_hierarchy
-            ]
-            sin_global = ht.from_numpy_parallel(sin_np, ds_hierarchy, device_group_hierarchy=device_group_hierarchy, requires_grad=False, name=f'sin_{_name}')
-            cos_global = ht.from_numpy_parallel(cos_np, ds_hierarchy, device_group_hierarchy=device_group_hierarchy, requires_grad=False, name=f'cos_{_name}')
-            out = ht.rotary(x, cos_global, sin_global, inplace=True)
-            return out
-        # query = apply_rotary_pos_emb(query, _name='q')
-        # key = apply_rotary_pos_emb(key, _name='k')
-        '''
-        
-        assert self.use_flash_attn, "currently only support flash attn"
-        # TODO: support packing api
-        attn_output = ht.parallel_attn(
-            qkv,             
-            self.head_dim, 
-            1, # group_query_ratio = q heads / k(v) heads, 1 means MHA and >1 means GQA
-            self.config.multi_seq_lens_symbol, 
-            self.config.multi_cp_group_symbol,
-            True,
-            self.config.cu_seqlens_list[self.layer_idx],
-            self.config.cu_seqlens_list[self.layer_idx],
-            self.config.max_seqlen_symbol,
-            self.config.max_seqlen_symbol
-        )[0]
-        
-        '''
-        # [mbs, seq_len, num_heads, 3 * head_dim]
-        qkv = qkv.reshape([self.config.mbs_times_dp_symbol, self.config.seq_len_symbol, ht.IntSymbol(self.num_heads), ht.IntSymbol(3 * self.head_dim)])
-        # [mbs, seq_len, num_heads, head_dim]
+        batch_size, seq_len, num_heads, head_dim = qkv.global_shape
+
+
+        qkv = qkv.reshape([batch_size, seq_len, num_heads, 3 * head_dim])
         query, key, value = ht.split(qkv, 3, qkv.ndim - 1)
-        attn_output = ht.attn(query, key, value, 0, -1, True)[0]
-        # [mbs * seq_len, num_heads * head_dim]
-        attn_output = attn_output.reshape([self.config.mbs_times_dp_symbol * self.config.seq_len_symbol, ht.IntSymbol(self.num_heads * self.head_dim)])
-        '''
-        
+
+
+        attn_output = ht.attn(query, key, value, 0.0, -1, False, False)[0]
+
         # row parallel, shape = [mbs * seq_len, num_heads * head_dim]
         attn_output = self.dense(attn_output)
         # dropout
         # attn_output = self.resid_dropout(attn_output)
         return attn_output
-
 
 
 class ParallelMLP(ht.nn.Module):
@@ -171,20 +136,20 @@ class ParallelMLP(ht.nn.Module):
         # output = self.dropout(output)
         return output
 
-class LLamaMLP(ht.nn.Module):
+class T5EncoderMLP(ht.nn.Module):
     def __init__(self, config, ds_parallel_configs, layer_idx, name='mlp'):
-        super(LLamaMLP, self).__init__()
+        super(T5EncoderMLP, self).__init__()
         self.config = config
         self.ds_parallel_configs = ds_parallel_configs
         self.parallel_mlp = ParallelMLP(config, ds_parallel_configs, layer_idx, name)
 
     def forward(self, hidden_states):
         origin_shape = hidden_states.global_shape # [b * seq_len, hidden_size]
-        assert len(origin_shape) == 2, "sequence_parallel: all is 2 dim matmul"
+        # assert len(origin_shape) == 2, "sequence_parallel: all is 2 dim matmul"
         hidden_states = self.parallel_mlp(hidden_states)
         return hidden_states
 
-class LLamaBlock(ht.nn.Module):
+class T5EncoderBlock(ht.nn.Module):
     def __init__(self, config, ds_parallel_configs, layer_idx):
         super().__init__()
         self.config = config
@@ -204,7 +169,7 @@ class LLamaBlock(ht.nn.Module):
         attention_mask=None,
     ):
         residual = hidden_states
-        hidden_states = self.rmsnorm_1(hidden_states)
+        # hidden_states = self.rmsnorm_1(hidden_states)
         attn_output = self.attn(
             hidden_states, # [b, seq_len, hidden_size]
             attention_mask=attention_mask # [b, 1, 1, seq_len]
@@ -221,9 +186,9 @@ class LLamaBlock(ht.nn.Module):
         return hidden_states
 
 
-class LLamaModel(ht.nn.Module):
+class T5EncoderModel(ht.nn.Module):
     def __init__(self, config, ds_parallel_configs):
-        super(LLamaModel, self).__init__()
+        super(T5EncoderModel, self).__init__()
         self.config = config
         self.ds_parallel_configs = ds_parallel_configs
         self.dtype = ht.float32
@@ -235,7 +200,7 @@ class LLamaModel(ht.nn.Module):
         self.drop = ht.nn.Dropout(config.embd_pdrop)
         blocks = []
         for i in range(config.num_hidden_layers):
-            blocks.append(LLamaBlock(config, get_multi_ds_parallel_config(ds_parallel_configs, f'blocks{i}'), layer_idx=i))
+            blocks.append(T5EncoderBlock(config, get_multi_ds_parallel_config(ds_parallel_configs, f'blocks{i}'), layer_idx=i))
         self.h = ht.nn.ModuleList(blocks)
         self.rmsnorm_f = ht.nn.HtMultiParallelLayerNorm(self.embed_dim, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm_final'), sequence_parallel=True, name='rmsnorm_final')
 

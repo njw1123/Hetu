@@ -8,10 +8,10 @@ from hetu.nn.modules.parallel_multi_ds import parallel_data_provider, parallel_m
 
 
 
-class DownEncoderBlock2D(ht.nn.Module):
+class DownEncoderBlock3D(ht.nn.Module):
 
     def __init__(self, num_layers, in_channels, out_channels, dropout, add_downsample, resnet_eps, downsample_padding, ds_parallel_configs, layer_idx):
-        super(DownEncoderBlock2D, self).__init__()
+        super(DownEncoderBlock3D, self).__init__()
         self.ds_parallel_configs = ds_parallel_configs
         self.layer_idx = layer_idx
 
@@ -85,7 +85,7 @@ class Downsample2D(ht.nn.Module):
         stride = 2
         self.name = name
 
-        self.conv = ht.nn.HtParallelConv2d(in_channels = self.in_channels, 
+        self.conv = ht.nn.HtParallelConv3d(in_channels = self.in_channels, 
                                    out_channels = self.out_channels, 
                                    kernel_size = kernel_size, 
                                    stride=stride, 
@@ -126,7 +126,7 @@ class ResnetBlock2D(ht.nn.Module):
         # self.norm1 = torch.nn.GroupNorm(num_groups=groups, num_channels=in_channels, eps=eps, affine=True)
 
 
-        self.conv1 = ht.nn.HtParallelConv2d(
+        self.conv1 = ht.nn.HtParallelConv3d(
             in_channels=self.in_channels,
             out_channels=self.out_channels,
             kernel_size=3,
@@ -145,7 +145,7 @@ class ResnetBlock2D(ht.nn.Module):
 
 
 
-        self.conv2 = ht.nn.HtParallelConv2d(
+        self.conv2 = ht.nn.HtParallelConv3d(
             in_channels=self.out_channels,
             out_channels=self.out_channels,
             kernel_size=3,
@@ -159,7 +159,7 @@ class ResnetBlock2D(ht.nn.Module):
         self.use_in_shortcut = self.in_channels != self.out_channels
 
         if self.use_in_shortcut:
-            self.conv_shortcut = ht.nn.HtParallelConv2d(
+            self.conv_shortcut = ht.nn.HtParallelConv3d(
                 in_channels=self.in_channels,
                 out_channels=self.out_channels,
                 kernel_size=1,
@@ -209,7 +209,7 @@ class Encoder(ht.nn.Module):
         # self.mid_block_add_attention = config.mid_block_add_attention
         
 
-        self.conv_in = ht.nn.HtParallelConv2d(
+        self.conv_in = ht.nn.HtParallelConv3d(
             in_channels=self.in_channels,
             out_channels=self.block_out_channels[0],
             kernel_size=3,
@@ -229,7 +229,7 @@ class Encoder(ht.nn.Module):
             is_final_block = i == len(self.block_out_channels) - 1
 
 
-            down_block = DownEncoderBlock2D(
+            down_block = DownEncoderBlock3D(
                 num_layers=self.layers_per_block,
                 in_channels=input_channel,
                 out_channels=output_channel,
@@ -260,7 +260,7 @@ class Encoder(ht.nn.Module):
         hidden_states = self.conv_in(hidden_states)
         print("hidden_states after conv in", hidden_states.shape)
         for down_block in self.down_blocks:
-            print("DownEncoderBlock2D", down_block.layer_idx)
+            print("DownEncoderBlock3D", down_block.layer_idx)
             hidden_states = down_block(hidden_states)
             print("hidden_states", hidden_states.shape)
         # hidden_states = self.mid_block(hidden_states)

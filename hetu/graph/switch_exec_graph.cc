@@ -2091,10 +2091,10 @@ Tensor ComplexExecComm::Instantiate(StreamIndex comm_stream_idx, bool ignore_sha
   // 但因为代码上的历史遗留原因这里仍保留之前的写法
   if (subgraph->subgraph_type() == SubGraphType::PIPELINE) {
     comm_stream_idx = kP2PStream;
-    HT_ASSERT(src_hetero_dim == dst_hetero_dim && src_hetero_size == dst_hetero_size)
-      << "hetero pp op should have the same hetero dim and same hetero size";
-    if (src_hetero_dim >= 0) {
-      sy_global_shape.at(src_hetero_dim) = sy_global_shape.at(src_hetero_dim) / src_hetero_size;
+    // 当VLM vision encoder和llm采用不用dp值当时候，将vision encoder的输出发送给LLM
+    // 例如vision encoder dp=1 llm dp>1, src_hetero_size和dst_hetero_size, src_hetero_dim和dst_hetero_dim都不相同，所以不能在这里加assert
+    if(dst_hetero_dim >= 0) {
+      sy_global_shape.at(dst_hetero_dim) = sy_global_shape.at(dst_hetero_dim) / dst_hetero_size;
     }
     // 再对partial维度进行划分
     // partial idx相同的group进行repartition操作

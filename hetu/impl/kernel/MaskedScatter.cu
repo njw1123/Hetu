@@ -14,6 +14,7 @@ namespace impl{
 
 void MaskedScatterCuda(const NDArray& input, const NDArray& mask, const NDArray& source,
                 NDArray& output, const Stream& stream) {
+  hetu::cuda::CUDADeviceGuard guard(stream.device_index());
   HT_ASSERT_CUDA_DEVICE(input);
   HT_ASSERT_SAME_DEVICE(input, mask);
   HT_ASSERT_SAME_DEVICE(input, source);
@@ -21,10 +22,10 @@ void MaskedScatterCuda(const NDArray& input, const NDArray& mask, const NDArray&
   HT_ASSERT_SAME_SHAPE(input, mask);
   HT_ASSERT_SAME_SHAPE(input, output);
 
-  auto maskPrefixSum = NDArray::ones(input->shape(), input->device(), kInt64, stream.stream_index());
+  auto maskPrefixSum = NDArray::empty(input->shape(), input->device(), kInt64, stream.stream_index());
   auto maskPrefixSum_data = maskPrefixSum->data_ptr<int64_t>();
   auto mask_data = mask->data_ptr<int64_t>();
-  exclusive_scan(mask_data, maskPrefixSum_data, cub::Sum(), (int64_t)0, input->numel(), stream);
+  exclusive_scan(mask_data, maskPrefixSum_data, cub::Sum(), (int64_t)0, input->numel(), stream); 
   size_t size = input->numel();
 
   HT_DISPATCH_INTEGER_AND_FLOATING_TYPES(
@@ -36,6 +37,7 @@ void MaskedScatterCuda(const NDArray& input, const NDArray& mask, const NDArray&
                                                     else return in;
                                                  });
   });
+
   NDArray::MarkUsedBy({input, mask, source, output, maskPrefixSum}, stream);
 }
 

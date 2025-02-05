@@ -15,8 +15,8 @@ ENV_FILE_PATH=${10:-"./scripts/env_4090.sh"}
 CASE=1
 if [[ ${CASE} -eq 1 ]]; then
 	# homo + greedy packing with static shape
-	NUM_GPUS=4
-	MULTI_TP_PP_LIST="[[(2, 1),(2, 1)], ]"
+	NUM_GPUS=1
+	MULTI_TP_PP_LIST="[[(1, 1)], ]"
 	BATCHING_METHOD=0
 elif [[ ${CASE} -eq 2 ]]; then	
     # homo + greedy packing with dynamic shape

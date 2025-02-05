@@ -484,15 +484,25 @@ void CommOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& outputs,
                                 const OpMeta& op_meta) const {
   const Tensor& input = inputs.at(0);
   Tensor& output = outputs.at(0);
-  const auto& ds_input = input->get_distributed_states();
   HT_ASSERT(input->graph().USE_HETERO_ID == true)
     << "comm op DoDeduceStates can only use when using hetero id";
   const auto& ds_dst = get_dst_distributed_states(input->producer());
   // TODO: check states/order between src and dst
-  HT_ASSERT(ds_input.is_valid() && ds_dst.is_valid())
-          << "distributed states for input and dst tensor must be valid"
-          << ", but found ds_input " << ds_input.ds_info()
-          << ", and ds dst " << ds_dst.ds_info();
+  // update:因为comm op输入和输出的的hetero size可能不一样，例如mllm中，vision encoder和llm的dp值不一样
+  // 所以只在hetero size内时检查是否合法
+  size_t input_hetero_size = inputs.at(0)->cur_ds_union().size();
+  size_t output_hetero_size = outputs.at(0)->cur_ds_union().size();
+  if(input->graph().CUR_HETERO_ID < input_hetero_size){
+    const auto& ds_input = input->get_distributed_states();
+    HT_ASSERT(ds_input.is_valid())
+      << "distributed states for src tensor must be valid"
+      << ", but found ds input " << ds_input.ds_info();
+  }
+  if(output->graph().CUR_HETERO_ID < output_hetero_size){
+    HT_ASSERT(ds_dst.is_valid())
+      << "distributed states for dst tensor must be valid"
+      << ", but found ds dst " << ds_dst.ds_info();  
+  }
   // now support hetero settings
   // device num could be different
   // sounds cool~
@@ -503,6 +513,11 @@ void CommOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& outputs,
   output->set_distributed_states(ds_dst);
 }
 
+void CommOpImpl::DeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
+                            TensorList& outputs, const OpMeta& op_meta) const {
+  return DoDeduceHeterProp(inputs_hetero_dim, outputs, op_meta);
+}
+
 void CommOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim,
                                    TensorList& outputs, const OpMeta& op_meta) const {
   int32_t hetero_dim = NULL_HETERO_DIM;
@@ -511,6 +526,8 @@ void CommOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim
     hetero_dim = _dst_ds_hierarchy.get(0).hetero_dim();
     split_pattern = _dst_ds_hierarchy.get(0).split_pattern();
   } else { // for comm op created in define_and_run_graph, with multi ds
+    std::cout << outputs.at(0)->graph().CUR_STRATEGY_ID << std::endl;
+    std::cout << _dst_ds_hierarchy.get(outputs.at(0)->graph().CUR_STRATEGY_ID).ds_union_info() << std::endl;
     hetero_dim = _dst_ds_hierarchy.get(outputs.at(0)->graph().CUR_STRATEGY_ID).hetero_dim();
     split_pattern = _dst_ds_hierarchy.get(outputs.at(0)->graph().CUR_STRATEGY_ID).split_pattern();
   }
@@ -519,6 +536,82 @@ void CommOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_hetero_dim
   // set split pattern here
   // only here
   outputs.at(0)->cur_ds_union().set_split_pattern(split_pattern);
+}
+
+
+// 因为comm op的输入和输出的hetero size可能不一样,而operator中DoDeduceStatesHierarchy将所有的输入和输出的hetero size都设置为一样
+// 所以需要重载DoDeduceStatesHierarchy，根绝comm op的dst_ds_hierarchy来给output设置hetero size
+void CommOpImpl::DoDeduceStatesHierarchy(const TensorList& inputs, TensorList& outputs, 
+                                      const OpMeta& op_meta, Graph& graph) const{
+  
+  std::cout << "start deduce states hierarchy" << std::endl;
+  int32_t hetero_size = 1;
+  std::vector<int32_t> inputs_hetero_dim;
+  std::cout << op_meta.name << std::endl;
+  for (const auto& input : inputs) {
+    HT_ASSERT(input->has_cur_ds_union())
+      << "Ds union of inputs should be created before deducing hetero dim"
+      <<  ", but cur strategy id is " << input->cur_strategy_id() 
+      << ", and size of its ds hierarchy is " << input->ds_hierarchy().size();
+    const auto& cur_ds_union = input->cur_ds_union();
+    inputs_hetero_dim.emplace_back(cur_ds_union.hetero_dim());
+    int32_t cur_hetero_size = cur_ds_union.size();
+    if (cur_hetero_size == 1) {
+      HT_ASSERT(cur_ds_union.hetero_dim() == NULL_HETERO_DIM)
+        << "Union size = 1 means homo";
+      continue;
+    }
+    if (hetero_size == 1) {
+      hetero_size = cur_hetero_size;
+    }
+    HT_ASSERT(cur_ds_union.hetero_dim() != NULL_HETERO_DIM)
+      << "Op input " << input << " has an illegal hetero ds";
+    std::cout << "heteor_size " << hetero_size << " cur_hetero_size " << cur_hetero_size << std::endl;
+    HT_ASSERT(hetero_size == cur_hetero_size)
+      << "Op " << op_meta.name << " has an unaligned hetero ds size";
+  }
+  for (auto& output : outputs) {
+    HT_ASSERT(!output->has_cur_ds_union())
+      << "Ds union of outputs shouldn't be created before deducing hetero dim";
+  }
+  // 创建所有outputs的ds union并确定hetero dim
+  graph.CREATE_STRATEGY = true;
+  // HT_LOG_WARN << "DeduceHeterProp for " << op_meta.name;
+  DeduceHeterProp(inputs_hetero_dim, outputs, op_meta);
+  graph.CREATE_STRATEGY = false;
+  // 依据是否为hetero
+  // 创建所有outputs的ds union中的ds
+  auto output_hetero_size = get_dst_ds_union(graph).size();
+  std::cout << "output_hetero_size " << output_hetero_size << std::endl;
+  for (auto& output : outputs) {
+    auto& ds_union = output->cur_ds_union();
+    if (ds_union.hetero_dim() == NULL_HETERO_DIM) {
+      ds_union.add(DistributedStates());
+    } else {
+      HT_ASSERT(output_hetero_size != 1)
+        << "There is a hetero dim, so the hetero size shouldn't equal to 1";
+      for (int32_t i = 0; i < output_hetero_size; i++) {
+        ds_union.add(DistributedStates());
+      }
+    }
+  }
+  // 推导所有outputs的ds union中的ds
+  graph.USE_HETERO_ID = true;
+  for (size_t cur_hetero_id = 0; cur_hetero_id < output_hetero_size; cur_hetero_id++) {
+    graph.CUR_HETERO_ID = cur_hetero_id;
+    std::cout << "start deduce states for " << op_meta.name << " hetero id " << cur_hetero_id << std::endl;
+    DeduceStates(inputs, outputs, op_meta);
+  }
+  std::cout << "over" << std::endl;
+  /*
+  for (auto& output : outputs) {
+    HT_LOG_WARN << output << " ds union is " << output->cur_ds_union().ds_union_info();
+  }
+  */
+  graph.CUR_HETERO_ID = 0;
+  graph.USE_HETERO_ID = false;
+  std::cout << "end deduce states hierarchy" << std::endl;
+
 }
 
 bool CommOpImpl::DoMapToParallelDevices(Operator& op,
@@ -664,14 +757,33 @@ TensorList CommOpImpl::DoGradient(Operator& op,
     DistributedStatesUnion dst_ds_union;
     int32_t ds_input_hetero_dim = input->cur_ds_union().hetero_dim();
     dst_ds_union.set_hetero_dim(ds_input_hetero_dim == -2 ? -1 : ds_input_hetero_dim);
-    size_t hetero_size = std::max(std::max(input->cur_ds_union().size(), output->cur_ds_union().size()), grad_output->cur_ds_union().size());
+
+    auto input_hetero_size = input->cur_ds_union().size();
+    auto output_hetero_size = output->cur_ds_union().size();
+    auto grad_output_hetero_size = grad_output->cur_ds_union().size();
+    // size_t hetero_size = std::max(std::max(input_hetero_size, output_hetero_size), grad_output_hetero_size);
+    size_t hetero_size = input_hetero_size;
+
+
     for (size_t cur_hetero_id = 0; cur_hetero_id < hetero_size; cur_hetero_id++) {
       graph.CUR_HETERO_ID = cur_hetero_id;
       const auto& ds_input = input->get_distributed_states();
       const auto& ds_output = output->get_distributed_states();
       const auto& ds_grad_output = grad_output->get_distributed_states();
-      HT_ASSERT(ds_input.is_valid() && ds_output.is_valid())
-              << "distributed states for input and output tensor must be valid!";
+
+      if(graph.CUR_HETERO_ID < input_hetero_size){
+        HT_ASSERT(ds_input.is_valid())
+          << "distributed states for input tensor must be valid!";
+      }
+      if(graph.CUR_HETERO_ID < output_hetero_size){
+        HT_ASSERT(ds_output.is_valid())
+          << "distributed states for output tensor must be valid!";
+      }
+      if(graph.CUR_HETERO_ID < grad_output_hetero_size){
+        HT_ASSERT(ds_grad_output.is_valid())
+          << "distributed states for grad output tensor must be valid!";
+      }
+
       // now support hetero settings
       // device num could be different
       // sounds cool~

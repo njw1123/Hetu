@@ -1,11 +1,13 @@
-NUM_LAYERS=${1:-32}
+#!/bin/bash
+
+NUM_LAYERS=${1:-4}
 # HIDDEN_SIZE=${2:-4096}
 HIDDEN_SIZE=${2:-256}
 # FFN_HIDDEN_SIZE=${3:-11008}
 FFN_HIDDEN_SIZE=${3:-2752}
 NUM_HEADS=${4:-32}
 GLOBAL_BATCH_SIZE=${5:-128}
-MAX_SEQ_LEN=${6:-8}
+MAX_SEQ_LEN=${6:-2048}
 IMAGE_SIZE=${7:-224}
 SERVER_ADDR=${7:-"127.0.0.1"} # 216
 SERVER_PORT=${8:-"23333"}
@@ -15,9 +17,9 @@ ENV_FILE_PATH=${10:-"./scripts/env_4090.sh"}
 CASE=1
 if [[ ${CASE} -eq 1 ]]; then
 	# homo + greedy packing with static shape
-	NUM_GPUS=6
-	VISION_MULTI_TP_PP_LIST="[[(1, 1),(1, 1)], ]"
-	LLM_MULTI_TP_PP_LIST="[[(1, 1),(1, 1),(1, 1), (1, 1)], ]"
+	NUM_GPUS=2
+	VISION_MULTI_TP_PP_LIST="[[(1, 1)], ]"
+	LLM_MULTI_TP_PP_LIST="[[(1, 1)], ]"
 	BATCHING_METHOD=0
 elif [[ ${CASE} -eq 2 ]]; then	
     # homo + greedy packing with dynamic shape
@@ -86,7 +88,7 @@ VISION_MODEL_CONFIG="\
 --vision_embed_dim 256 \
 --vision_mlp_dim 1024 \
 --vision_num_heads 8 \
---vision_num_layers 12 \
+--vision_num_layers 2 \
 --vision_dropout 0.0 \
 --in_channels 3"
 
@@ -107,11 +109,11 @@ LLM_MODEL_CONFIG="\
 TRAINING_CONFIG="\
 --global_batch_size $GLOBAL_BATCH_SIZE \
 --epochs 4 \
---steps 1 \
+--steps 2 \
 --lr 1e-4 \
 --adam_weight_decay 0.01 \
---bf16"
-
+--bf16 \
+--torch_profile 1"
 # 分布式运行时配置参数
 DISTRIBUTED_CONFIG="\
 --vision_multi_tp_pp_list \"${VISION_MULTI_TP_PP_LIST}\" \

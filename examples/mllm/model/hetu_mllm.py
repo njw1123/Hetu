@@ -47,6 +47,7 @@ class MLLMModel(ht.nn.Module):
         text_embedding = self.llm.wte(text_ids)
         print("vision_hidden_states", vision_hidden_states.ds_hierarchy)
         print("text_embedding", text_embedding.ds_hierarchy)    
+        print("self.llm.h[0].rmsnorm_1.device_group_unions", self.llm.h[0].rmsnorm_1.device_group_unions)
         vision_hidden_states = ht.comm(vision_hidden_states, text_embedding.ds_hierarchy, self.llm.h[0].rmsnorm_1.device_group_unions, name="vision_hidden_states_comm")
 
         # image_mask_repeat = ht.repeat(image_mask, text_embedding.shape)

@@ -109,6 +109,15 @@ DECLARE_KERNEL_CPU_AND_CUDA(Conv2dBroadcast, const NDArray&, NDArray&,
                             const Stream&);
 DECLARE_KERNEL_CPU_AND_CUDA(Conv2dReduceSum, const NDArray&, NDArray&,
                             const Stream&);
+DECLARE_KERNEL_CPU_AND_CUDA(Conv3d, const NDArray&, const NDArray&, NDArray&,
+                            const int, const int, const int, const int, const int, const int,
+                            const Stream&);
+DECLARE_KERNEL_CPU_AND_CUDA(Conv3dGradientofFilter, const NDArray&,
+                            const NDArray&, NDArray&, const int, const int, const int,
+                            const int, const int, const int, const Stream&);
+DECLARE_KERNEL_CPU_AND_CUDA(Conv3dGradientofData, const NDArray&,
+                            const NDArray&, NDArray&, const int, const int, const int,
+                            const int, const int, const int, const Stream&);                            
 DECLARE_KERNEL_CPU_AND_CUDA(DataTransfer, const NDArray& from, NDArray& to,
                             const Stream&);
 DECLARE_KERNEL_CPU_AND_CUDA(DeQuantization, const NDArray&, NDArray&, const NDArray&, NDArray&, 

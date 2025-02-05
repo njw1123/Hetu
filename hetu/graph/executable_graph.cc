@@ -1219,8 +1219,6 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
     HT_LOG_INFO << local_device << ": params_size = " << params_size;
   }
 
-  HT_LOG_DEBUG << local_device << ": 0. Create Execution Plan [end]";
-
   // ********************** Run Level Check Point **********************
   if (_run_level == RunLevel::TOPO) {
     return {};
@@ -1668,41 +1666,11 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
       << "fetch " << fetch << " must have placement group";
     // HT_LOG_INFO << fetch << " placement group union is " << fetch->placement_group_union();
     if (fetch->placement_group_union().has(local_device) && fetch->placement().is_undetermined()) {
-      /*
-      // topo
-      OpRefList topo_before_instantiate = Graph::TopoSort(fetches, num_ops(), is_op_computed);
-      HT_LOG_DEBUG << local_device << ": global topo before instantiate: " << topo_before_instantiate;
-      */
-     
+    
       // instantiate ops
       HT_LOG_DEBUG << local_device << ": [Execution Plan] Instantiate begin...";
       Instantiate(fetches, local_device);
       HT_LOG_DEBUG << local_device << ": [Execution Plan] Instantiate end...";
-
-      /*
-      // init instantiated topo
-      OpRefList topo_before_recompute = Graph::TopoSort(fetches, num_ops(), is_op_computed);
-      HT_LOG_DEBUG << local_device << ": global topo before recompute pass: " << topo_before_recompute;
-
-      // add recompute pass
-      HT_LOG_DEBUG << local_device << ": [Execution Plan] recompute pass begin...";
-      Graph::push_graph_ctx(id());
-      Recompute::InsertRecomputedOps(topo_before_recompute);
-      Graph::pop_graph_ctx();
-      HT_LOG_DEBUG << local_device << ": [Execution Plan] recompute pass end...";
-
-      // init topo with recomputed ops
-      OpRefList topo_before_activation_offload = Graph::TopoSort(fetches, num_ops(), is_op_computed);
-      HT_LOG_DEBUG << local_device << ": global topo before activation offload pass: " << topo_before_activation_offload;
-
-      // insert activation offload ops
-      // TODO: need code review, offload may have bugs
-      HT_LOG_DEBUG << local_device << ": [Execution Plan] activation offload pass begin...";
-      Graph::push_graph_ctx(id());
-      ActivationCPUOffload::OffloadToCPU(topo_before_activation_offload);
-      Graph::pop_graph_ctx();
-      HT_LOG_INFO << local_device << ": [Execution Plan] activation offload pass end...";
-      */
 
       // init topo contains comm_op
       OpRefList topo_before_substitute_comm = Graph::TopoSort(fetches, num_ops(), is_op_computed);
@@ -1954,20 +1922,7 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
       const auto& update_topo = _compute_optimize_bridge_subgraph_map[param->producer()->id()]->update_ops_topo();
       // HT_LOG_INFO << param << " corresponding transfer subgraph " << _optimize_compute_bridge_subgraph_map[param->producer()->id()]->global_name() << " topo is " << transfer_topo;
       // HT_LOG_INFO << param << " corresponding update subgraph " << _compute_optimize_bridge_subgraph_map[param->producer()->id()]->global_name() << " topo is " << update_topo;
-      /*
-      if (_dp_overlap) {
-        auto parent_transfer_subgraph = _optimize_compute_bridge_subgraph_map[param->producer()->id()]->parent_graph();
-        auto parent_update_subgraph = _compute_optimize_bridge_subgraph_map[param->producer()->id()]->parent_graph();
-        HT_ASSERT(parent_transfer_subgraph != nullptr && parent_transfer_subgraph->subgraph_type() == SubGraphType::MODULE
-                  && parent_update_subgraph != nullptr && parent_update_subgraph->subgraph_type() == SubGraphType::MODULE
-                  && parent_transfer_subgraph == parent_update_subgraph)
-          << "the parent subgraph shoud be exactly the same";
-        auto parent_module = parent_transfer_subgraph;
-        parent_module->topo_sort();
-        HT_LOG_INFO << parent_module->global_name() << " fwd topo is " << parent_module->ops_topo();
-        HT_LOG_INFO << parent_module->global_name() << " bwd topo is " << parent_module->bwd_ops_topo();
-      }
-      */
+
       // 把每个grad reduce算子的上一个算子取出来
       if (_overlap_grad_reduce) {
         if (update_topo.size() >= 1) {

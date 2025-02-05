@@ -13,6 +13,7 @@ namespace impl{
 
 void MaskedSelectCuda(const NDArray& input, const NDArray& mask,
                 NDArray& output, const Stream& stream) {
+  hetu::cuda::CUDADeviceGuard guard(stream.device_index());
   HT_ASSERT_CUDA_DEVICE(input);
   HT_ASSERT_SAME_DEVICE(input, mask);
   HT_ASSERT_SAME_DEVICE(input, output);

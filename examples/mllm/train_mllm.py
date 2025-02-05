@@ -9,6 +9,8 @@ import json
 import numpy as np
 import hetu as ht
 
+from torch.profiler import profile, ProfilerActivity
+import torch
 from arugments import add_all_args
 from model.hetu_mllm import MLLMModel
 from mllm_config import MLLMConfig, VisionConfig, LLaMAConfig
@@ -188,6 +190,7 @@ def pretrain(args):
     vision_config.multi_seq_lens_symbol = []
     vision_config.multi_cp_group_symbol = []
     for i in range(len(image_input_ds_hierarchy)):
+        print("vision cur dp", image_input_ds_hierarchy[i].get(0).get_dim(0))
         cur_dp = image_input_ds_hierarchy[i].get(0).get_dim(0) # dp_i for strategy_i
         vision_config.multi_seq_lens_symbol.append([image_inputs.symbolic_shape[0] for _ in range(cur_dp)])
         vision_config.multi_cp_group_symbol.append([ht.IntSymbol(i) for i in range(cur_dp)])
@@ -198,6 +201,7 @@ def pretrain(args):
     llm_config.multi_cp_group_symbol = []
     for i in range(len(label_ds_hierarchy)):
         cur_dp = label_ds_hierarchy[i].get(0).get_dim(0)
+        print("llm cur dp", label_ds_hierarchy[i].get(0).get_dim(0))
         llm_config.multi_seq_lens_symbol.append([text_ids.symbolic_shape[0] for _ in range(cur_dp)])
         llm_config.multi_cp_group_symbol.append([ht.IntSymbol(i) for i in range(cur_dp)])
     llm_config.max_seqlen_symbol = ht.IntSymbol(1)
@@ -221,8 +225,7 @@ def pretrain(args):
     # 6. Build Backward Graph
     print(f'{local_device}: optimizer minimize begin...')
     # opt = ht.SGDOptimizer(lr=args.lr, momentum = 0.0)
-    # opt = ht.AdamOptimizer(init_lr=args.lr, max_lr=args.lr, min_lr=args.lr, lr_warmup_steps=0, lr_decay_steps=1, lr_decay_style="constant")
-    opt = ht.AdamOptimizer(lr=args.lr)
+    opt = ht.AdamOptimizer(init_lr=args.lr, max_lr=args.lr, min_lr=args.lr, lr_warmup_steps=0, lr_decay_steps=1, lr_decay_style="constant")
     train_op = opt.minimize(loss)
     print(f'{local_device}: optimizer minimize end...')
 
@@ -277,6 +280,7 @@ def pretrain(args):
                 batch_indices = list(range(batch_size_per_dp * dp_id, batch_size_per_dp * (dp_id + 1)))
                 assert max_padded_seqlen, "padding should provide the max seqlen after padding"
                 vision_config.max_seqlen_symbol.set_data(max_padded_seqlen - 1) 
+                llm_config.max_seqlen_symbol.set_data(max_padded_seqlen - 1) 
                 input_bucket, label_bucket = get_input_and_label_buckets(sorted_batch, tokenizer.pad, batch_indices, max_padded_seqlen, alignment)
                 input_bucket.pad_data()
                 label_bucket.pad_data()
@@ -361,33 +365,54 @@ def pretrain(args):
                 #     loss_mask_list.append(micro_batch_loss_mask)
                 # feed_dict[loss_mask] = loss_mask_list
 
-
             start_time = time.time()
-            try:
-                print("feed_dict", feed_dict)
-                results = train_op.graph.run(
-                    loss, 
-                    [loss, train_op], 
-                    feed_dict=feed_dict, 
-                    num_micro_batches=1, 
-                    cur_strategy_id=strategy_id,
-                    run_level = ht.run_level("update")
-                )    
-            except RuntimeError as e:
-                print(e)
-                with open("./logs/exception.txt", 'w') as file:
-                    print(f"{local_device}:", file=file)
-                    print(e, file=file)
-                os.killpg(0, signal.SIGTERM)
+            print("args.torch_profile", args.torch_profile)
+            print("step", step)
+            if args.torch_profile != 0 and step == 0:
+                with profile(activities=[ProfilerActivity.CUDA]) as prof:
+                torch.cuda.cudart().cudaProfilerStart()
+                try:
+                    results = train_op.graph.run(
+                        loss, 
+                        [loss, train_op], 
+                        feed_dict=feed_dict, 
+                        num_micro_batches=1, 
+                        cur_strategy_id=strategy_id,
+                        run_level = ht.run_level("update")
+                    )    
+                except RuntimeError as e:
+                    print(e)
+                    with open("./logs/exception.txt", 'w') as file:
+                        print(f"{local_device}:", file=file)
+                        print(e, file=file)
+                    os.killpg(0, signal.SIGTERM)
+                torch.cuda.cudart().cudaProfilerStop()
+                prof.export_chrome_trace(f"/home/gehao/njw1123/hetu_mm/examples/mllm/trace_{local_device}.json")
+            else:
+                try:
+                    results = train_op.graph.run(
+                        loss, 
+                        [loss, train_op], 
+                        feed_dict=feed_dict, 
+                        num_micro_batches=1, 
+                        cur_strategy_id=strategy_id,
+                        run_level = ht.run_level("update")
+                    )    
+                except RuntimeError as e:
+                    print(e)
+                    with open("./logs/exception.txt", 'w') as file:
+                        print(f"{local_device}:", file=file)
+                        print(e, file=file)
+                    os.killpg(0, signal.SIGTERM) 
 
 
-        end_time = time.time()
-        consumed_samples += args.global_batch_size
-        # 如果在pipeline的最后一个stage上那么就打印loss
-        # print(tp_pp_list[dp_id])
-        if stage_id == llm_multi_tp_pp_list[0][dp_id][1] - 1 and len(results) > 0:
-            loss_out = results[0].numpy(force=True).mean()
-            print(f"{local_device}: [Epoch {epoch}] (step {step}, consumed_samples = {consumed_samples}): loss = {loss_out:.3f}, time = {end_time - start_time:.4f}")
+            end_time = time.time()
+            consumed_samples += args.global_batch_size
+            # 如果在pipeline的最后一个stage上那么就打印loss
+            # print(tp_pp_list[dp_id])
+            if stage_id == llm_multi_tp_pp_list[0][dp_id][1] - 1 and len(results) > 0 and results[0] is not None:
+                loss_out = results[0].numpy(force=True).mean()
+                print(f"{local_device}: [Epoch {epoch}] (step {step}, consumed_samples = {consumed_samples}): loss = {loss_out:.3f}, time = {end_time - start_time:.4f}")
         
         return consumed_samples
 

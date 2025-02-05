@@ -106,18 +106,18 @@ def pretrain(args):
     dp_size = text_input_ds_hierarchy[0].get(0).get_dim(0)
     dummy_size = dp_size * args.max_seq_len
     # embed_dim = args.patch_size * args.patch_size * 3
-    C, H, W = 3, 128, 128
+    C, D, H, W = 3, 128, 128, 128
     # mbs_times_dp = dp_size * args.micro_batch_size
-    image_inputs = ht.parallel_placeholder(ht.float32, global_shape=[dp_size, C, H, W], ds_hierarchy=image_input_ds_hierarchy, device_group_hierarchy=image_input_dg_hierarchy, name='input_ids')
+    image_inputs = ht.parallel_placeholder(ht.float32, global_shape=[dp_size, C, D, H, W], ds_hierarchy=image_input_ds_hierarchy, device_group_hierarchy=image_input_dg_hierarchy, name='input_ids')
     text_ids = ht.parallel_placeholder(ht.int64, global_shape=[dp_size, args.max_seq_len], ds_hierarchy=text_input_ds_hierarchy, device_group_hierarchy=text_input_dg_hierarchy, name='input_ids')
     time_steps = ht.parallel_placeholder(ht.float32, global_shape=[dp_size, args.frequency_embedding_size], ds_hierarchy=text_input_ds_hierarchy, device_group_hierarchy=text_input_dg_hierarchy, name='input_ids')
-    sqrt_alphas_cumprod = ht.parallel_placeholder(ht.float32, global_shape=[dp_size,1,1,1], ds_hierarchy=text_input_ds_hierarchy, device_group_hierarchy=text_input_dg_hierarchy, name='input_ids')
-    sqrt_one_minus_alphas_cumprod = ht.parallel_placeholder(ht.float32, global_shape=[dp_size,1,1,1], ds_hierarchy=text_input_ds_hierarchy, device_group_hierarchy=text_input_dg_hierarchy, name='input_ids')
+    sqrt_alphas_cumprod = ht.parallel_placeholder(ht.float32, global_shape=[dp_size,1,1,1,1], ds_hierarchy=text_input_ds_hierarchy, device_group_hierarchy=text_input_dg_hierarchy, name='input_ids')
+    sqrt_one_minus_alphas_cumprod = ht.parallel_placeholder(ht.float32, global_shape=[dp_size,1,1,1,1], ds_hierarchy=text_input_ds_hierarchy, device_group_hierarchy=text_input_dg_hierarchy, name='input_ids')
     # position_ids = ht.parallel_placeholder(ht.int64, global_shape=[2 * dummy_size, args.hidden_size], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='position_ids')
     # token_type_ids = ht.parallel_placeholder(ht.int64, global_shape=[dummy_size], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='token_type_ids')
     # attention_mask = ht.parallel_placeholder(ht.float32, global_shape=[dummy_size], ds_hierarchy=input_ds_hierarchy, device_group_hierarchy=input_dg_hierarchy, name='attention_mask')
     # loss_mask =  ht.parallel_placeholder(ht.float32, global_shape=[dummy_size], ds_hierarchy=label_ds_hierarchy, device_group_hierarchy=label_dg_hierarchy, name='loss_mask')
-    masked_lm_labels = ht.parallel_placeholder(ht.float32, global_shape=[dp_size, args.block_out_channels[-1], 15, 15], ds_hierarchy=label_ds_hierarchy, device_group_hierarchy=label_dg_hierarchy, name='masked_lm_labels')
+    masked_lm_labels = ht.parallel_placeholder(ht.float32, global_shape=[dp_size, args.block_out_channels[-1], 15, 15, 15], ds_hierarchy=label_ds_hierarchy, device_group_hierarchy=label_dg_hierarchy, name='masked_lm_labels')
 
     # 3. Build Model Weight
 
@@ -149,7 +149,7 @@ def pretrain(args):
     mmdit_config.mbs_times_dp_symbol.set_data(1)
     # print("dp size", dp_size)
     mmdit_config.text_seq_len_symbol.set_data(args.max_seq_len)
-    mmdit_config.vision_seq_len_symbol.set_data(49)
+    mmdit_config.vision_seq_len_symbol.set_data(343)
 
     print(f'{local_device}: init model begin...')
     mmdit_model = MMDitMHeadModel(config = mmdit_config, ds_parallel_configs = ds_parallel_configs)
@@ -200,8 +200,8 @@ def pretrain(args):
     # 6. Build Backward Graph
     print(f'{local_device}: optimizer minimize begin...')
     # opt = ht.SGDOptimizer(lr=args.lr, momentum = 0.0)
-    # opt = ht.AdamOptimizer(init_lr=args.lr, max_lr=args.lr, min_lr=args.lr, lr_warmup_steps=0, lr_decay_steps=1, lr_decay_style="constant")
-    opt = ht.AdamOptimizer(lr=args.lr)
+    opt = ht.AdamOptimizer(init_lr=args.lr, max_lr=args.lr, min_lr=args.lr, lr_warmup_steps=0, lr_decay_steps=1, lr_decay_style="constant")
+    # opt = ht.AdamOptimizer(lr=args.lr)
     train_op = opt.minimize(loss)
     print(f'{local_device}: optimizer minimize end...')
 
@@ -274,17 +274,19 @@ def pretrain(args):
                     for _ in range(num_images):
                         # height = np.random.randint(50, 500)  # 随机高度
                         # width = np.random.randint(50, 500)   # 随机宽度
+                        
+                        depth = D
                         height = H
                         width = W
-                        image = np.random.randint(0, 256, (height, width, 3), dtype=np.uint8)  # RGB 图片
+                        image = np.random.randint(0, 256, (depth, height, width, 3), dtype=np.uint8)  # RGB 图片
                         # images.append((image, (height, width)))
                         images.append(image)
                     return images
 
                 dp_size = 1
                 images = generate_random_images(dp_size)
-                image_list = [np.array(images).astype(np.float32).reshape(-1, 3, H, W)]
-                labels_list = [np.random.randint(0, 1, (dp_size, args.block_out_channels[-1], 15, 15)).astype(np.float32)]
+                image_list = [np.array(images).astype(np.float32).reshape(-1, 3, D, H, W)]
+                labels_list = [np.random.randint(0, 1, (dp_size, args.block_out_channels[-1], 15, 15, 15)).astype(np.float32)]
                 text_list = [np.random.randint(0, 100, (dp_size, args.max_seq_len,)).astype(np.int64)]
                 time_steps_list = [np.random.randint(0, 100, (dp_size,))]
                 sqrt_alphas_cumprod_list, sqrt_one_minus_alphas_cumprod_list = diffusion.q_sample(t=time_steps_list[0])

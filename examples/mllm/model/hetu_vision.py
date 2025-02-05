@@ -39,7 +39,7 @@ class PatchMerger(ht.nn.Module):
         self.embed_dim = config.embed_dim
         self.hidden_size = config.hidden_size
         self.ds_parallel_configs = ds_parallel_configs
-        self.ln_q = ht.nn.HtMultiParallelLayerNorm(self.embed_dim, get_multi_ds_parallel_config(ds_parallel_configs, 'ln_q'), sp=True, name=f'ln_q_patch_merger')
+        self.ln_q = ht.nn.HtMultiParallelLayerNorm(self.embed_dim, get_multi_ds_parallel_config(ds_parallel_configs, 'ln_q'), sequence_parallel=True, name=f'ln_q_patch_merger')
 
 
         self.linear1 = ht.nn.HtMultiColumnParallelLinear(
@@ -56,7 +56,7 @@ class PatchMerger(ht.nn.Module):
             self.embed_dim,
             self.hidden_size,
             get_multi_ds_parallel_config(ds_parallel_configs, 'dense_embed_dim_to_hidden_size'),
-            sp=True,
+            sequence_parallel=True,
             bias=self.add_bias,
             name=f'rowp_{name}'
             # init_method=output_layer_init_method
@@ -106,7 +106,7 @@ class VisionAttention(ht.nn.Module):
             self.embed_dim,
             self.embed_dim,
             get_multi_ds_parallel_config(ds_parallel_configs, 'dense', layer_idx),
-            sp=True,
+            sequence_parallel=True,
             bias=self.add_bias,
             name=f'rowp_{name}'
         )
@@ -167,7 +167,7 @@ class VisionParallelMLP(ht.nn.Module):
             config.mlp_dim,
             config.embed_dim,
             get_multi_ds_parallel_config(ds_parallel_configs, 'dense_4h_to_h', layer_idx),
-            sp=True,
+            sequence_parallel=True,
             bias=self.add_bias,
             name=f'rowp_{name}'
             # init_method=output_layer_init_method
@@ -195,9 +195,9 @@ class VisionBlock(ht.nn.Module):
         self.embed_dim = config.embed_dim
 
         # sequence parallel: layernorm前做reduce-scatter(这一部分由row prallel的reduce-scatter完成); layernorm后做allgather
-        self.rmsnorm_1 = ht.nn.HtMultiParallelLayerNorm(self.embed_dim, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm1', layer_idx), sp=True, name=f'rmsnorm1_block{layer_idx}')
+        self.rmsnorm_1 = ht.nn.HtMultiParallelLayerNorm(self.embed_dim, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm1', layer_idx), sequence_parallel=True, name=f'rmsnorm1_block{layer_idx}')
         self.attn = VisionAttention(config, get_multi_ds_parallel_config(ds_parallel_configs, "attn", layer_idx), layer_idx=layer_idx, name=f'attn_block{layer_idx}')
-        self.rmsnorm_2 = ht.nn.HtMultiParallelLayerNorm(self.embed_dim, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm2', layer_idx), sp=True, name=f'rmsnorm2_block{layer_idx}')
+        self.rmsnorm_2 = ht.nn.HtMultiParallelLayerNorm(self.embed_dim, get_multi_ds_parallel_config(ds_parallel_configs, 'layernorm2', layer_idx), sequence_parallel=True, name=f'rmsnorm2_block{layer_idx}')
         self.mlp = VisionParallelMLP(config, get_multi_ds_parallel_config(ds_parallel_configs, "mlp", layer_idx), layer_idx=layer_idx, name=f'mlp_block{layer_idx}')
 
     def forward(
@@ -269,8 +269,8 @@ class VisionModel(ht.nn.Module):
         
         # for sequence parallel
         # todo: this is pretty hacky, find a better way
-        sp = True
-        if sp:
+        sequence_parallel = True
+        if sequence_parallel:
             ds_hierarchy_input = hidden_states.ds_hierarchy
             ds_hierarchy_output = []
             for ds_union_input in ds_hierarchy_input:
@@ -278,9 +278,9 @@ class VisionModel(ht.nn.Module):
                 for ds_input in ds_union_input.ds_list:
                     ds_split0 = ht.DistributedStates(ds_input.device_num, {0: ds_input.device_num}, [0])
                     assert ds_union_input.hetero_dim == -3 or ds_union_input.hetero_dim == 0, \
-                        "Workaround: sp assume input only hetero on split0"
+                        "Workaround: sequence_parallel assume input only hetero on split0"
                     assert ds_input.device_num == ds_input.get_dim(0) * ds_input.get_dim(-1), \
-                        "Workaround: sp assume input only split in dimension 0 for dp"
+                        "Workaround: sequence_parallel assume input only split in dimension 0 for dp"
                     ds_list_split0.append(ds_split0)
                 ds_hierarchy_output.append(ht.DistributedStatesUnion(ds_list_split0, 0 if ds_union_input.hetero_dim != -3 else -3))
             # [b * seq_len // tp, embed_dim]
@@ -295,7 +295,7 @@ class VisionModel(ht.nn.Module):
             # hetero需要显示地插入通信算子
             if i != len(self.h) - 1:
                 next_block = self.h[i + 1]
-                if next_block.rmsnorm_1.sp:
+                if next_block.rmsnorm_1.sequence_parallel:
                     hidden_states = ht.comm(hidden_states, next_block.rmsnorm_1.ds_union_map['split0'], next_block.rmsnorm_1.device_group_unions, name=f"pipeline_layer_{i}_comm")
                 else:
                     hidden_states = ht.comm(hidden_states, next_block.attn.qkv_dense.ds_union_map['split0_dup'], next_block.rmsnorm_1.device_group_unions, name=f"pipeline_layer_{i}_comm")
