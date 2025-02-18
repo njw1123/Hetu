@@ -9,7 +9,7 @@ NDArrayList ConcatenateOpImpl::DoCompute(Operator& op,
                                          const NDArrayList& inputs,
                                          RuntimeContext& runtime_ctx) const {
   // inplace
-  if (inputs.size() == 1) {
+  if (inputs.size() == 1 && !runtime_ctx.has_runtime_allocation(op->output(0)->id())) {
     return inputs;
   }
   auto outputs = DoAllocOutputs(op, inputs, runtime_ctx);

@@ -236,6 +236,7 @@ void AttnCommRing::PrepareKVBlocks(const NDArray& local_k, const NDArray& local_
   // 最一开始拥有的local的kv映射到0号storage上
   // 下一轮即将获得的映射到1号storage上
   // 依次类推
+  // 因此需要注意每个rank的视角下同一个编号的storage并不一定对应同一群block
   int64_t cur_storage_idx = 0;
   int64_t cur_block_idx = _ring_idx;
   HT_ASSERT(_kv_block_to_storage_map.empty())
@@ -328,7 +329,15 @@ void AttnCommRing::PrepareKVBlocks(const NDArray& local_k, const NDArray& local_
                                                        HTShape{_batch_size * 2, _seq_len_list.at(_ring_idx), _kv_num_heads, _head_dim});
     _final_next_kv_block->bind_attn_storage(_kv_storage_list.at(final_next_storage_idx));
   }
-  // 将初始时的local kv放入到对应的ring buffer中
+  // 初始化ring buffer的数值
+  // 首先如果含有acc_dk和acc_dv需要全部置0
+  if (piggyback_grad) {
+    for (size_t i = 0; i < _kv_storage_size; i++) {
+      auto acc_dkv = _kv_block_list[(_ring_idx + i) % _ring_size]->get_4d_acc_dkv();
+      NDArray::full_(acc_dkv, 0, _stream_idx);
+    }
+  }
+  // 其次要将初始时的local kv放入到对应的ring buffer中
   auto block_local_k = _kv_block_list[_ring_idx]->get_4d_k();
   auto block_local_v = _kv_block_list[_ring_idx]->get_4d_v();
   NDArray::contiguous(local_k, _stream_idx, block_local_k);
@@ -406,8 +415,10 @@ void AttnCommRing::PrepareStorageBwd(const std::shared_ptr<AttnCtx>& attn_ctx, c
   // 同时piggyback下一轮的acc_dk与acc_dv
   PrepareKVBlocks(local_k, local_v, false, true);
   // 3、分配grad_output和_acc_dq
+  // _acc_dq需要置零
   _grad_output = grad_output;
   _acc_dq = local_dq;
+  NDArray::full_(_acc_dq, 0, _stream_idx);
   // 4、分配临时的dq、dk和dv的storage
   // 这里按最长的seq_len去分配
   // 目前走mempool临时去分配
@@ -530,8 +541,8 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
     // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnCuda begin, q idx = " << q_idx << " and kv idx = " << kv_idx << ", q_slice is " << q_slice << " and k_slice (similar to v_slice) is " << k_slice;
     // 这里的softmax_lse与out都是一个block的局部的输出
     HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttn", hetu::impl::FlashAttn,
-                                 q_slice, k_slice, v_slice, out, empty_ndarray,
-                                 empty_ndarray, empty_ndarray, empty_ndarray, softmax_lse,
+                                 q_slice, k_slice, v_slice, out, q_slice,
+                                 k_slice, v_slice, out, softmax_lse,
                                  empty_ndarray, rng_state, _p_dropout, _softmax_scale,
                                  is_causal, false, Stream(_local_device, _stream_idx));
     // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnCuda end, out is " << out;
@@ -977,6 +988,7 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
     << "ParallelFlashAttention forward only supports head dimension at most 256 and must be divided by 8";
   auto stream_idx = op->instantiation_ctx().stream_index;
   auto reshaped_qkv = NDArray::view(qkv, {batch_size, seq_len, total_num_heads, _head_dim});
+  HT_LOG_WARN << op << " reshaped_qkv shape is " << reshaped_qkv->shape() << ", sum is " << NDArray::sum(reshaped_qkv) << ", data is " << reshaped_qkv;
   auto reshaped_output = NDArray::view(output, {batch_size, seq_len, q_num_heads, _head_dim});
   // self-attn
   HTShape q_shape = {batch_size, seq_len, q_num_heads, _head_dim};

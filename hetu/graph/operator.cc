@@ -242,7 +242,7 @@ NDArrayList OpInterface::DoAllocOutputs(Operator& op, const NDArrayList& inputs,
         // HT_LOG_TRACE << hetu::impl::comm::GetLocalDevice() << ": exec op " << op
           // << " output " << i << " shape = " << output_shape << " ds = " << op->output(i)->get_distributed_states().ds_info();
         if (runtime_ctx.has_runtime_allocation(output_id)) {
-          // HT_LOG_INFO << op->output(i) << " has runtime allocation";
+          // HT_LOG_INFO << op->output(i) << " id is " << output_id << ", has runtime allocation";
           outputs.push_back(runtime_ctx.get_runtime_allocation(output_id));
         } 
         // alloc on-the-fly

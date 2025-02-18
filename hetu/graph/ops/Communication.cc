@@ -484,6 +484,10 @@ void CommOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& outputs,
                                 const OpMeta& op_meta) const {
   const Tensor& input = inputs.at(0);
   Tensor& output = outputs.at(0);
+<<<<<<< HEAD
+=======
+  const auto& ds_input = input->get_distributed_states();
+>>>>>>> lhy/main
   HT_ASSERT(input->graph().USE_HETERO_ID == true)
     << "comm op DoDeduceStates can only use when using hetero id";
   const auto& ds_dst = get_dst_distributed_states(input->producer());
@@ -870,7 +874,7 @@ NDArrayList AllReduceOpImpl::DoCompute(Operator& op,
                                        const NDArrayList& inputs,
                                        RuntimeContext& ctx) const {
   // NDArrayList outputs = inplace() ? inputs : DoAllocOutputs(op, inputs, ctx);
-  NDArrayList outputs = inputs; // just inplace here
+  NDArrayList outputs = !ctx.has_runtime_allocation(op->output(0)->id()) ? inputs : DoAllocOutputs(op, inputs, ctx); // just inplace here
   HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::AllReduce, inputs.at(0),
                                   outputs.at(0), reduction_type(), _comm_group, // _comm_group is a subset of placement_group
@@ -1121,7 +1125,9 @@ NDArrayList AllGatherOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
   // workaround: no buffer for allgather inside lora
   if (op->name().find("lora") != op->name().npos) {
     outputs = DoAllocOutputs(op, inputs, runtime_ctx);
-  } else if (_buffer_for_allgather.is_defined() && _buffer_for_allgather->numel() >= output_numel) {
+  } else if (!runtime_ctx.has_runtime_allocation(op->output(0)->id()) 
+             && _buffer_for_allgather.is_defined() 
+             && _buffer_for_allgather->numel() >= output_numel) {
     auto begin_pos = HTShape(cur_buffer_shape.size(), 0);
     NDArray _slice_buffer_for_all_gather = NDArray::slice(_buffer_for_allgather, begin_pos, cur_buffer_shape,
                                                           op->stream_index());
@@ -1350,7 +1356,7 @@ NDArrayList SplitAllReduceOpImpl::DoCompute(Operator& op,
     }
   }
   NDArrayList outputs = inputs;
-  if (!can_inplace) {
+  if (!can_inplace || ctx.has_runtime_allocation(op->output(0)->id())) {
     outputs = DoAllocOutputs(op, inputs, ctx);
   }
   // 目前只支持第0维切

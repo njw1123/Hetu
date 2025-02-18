@@ -181,7 +181,6 @@ void DefineAndRunGraph::DeducePipeline(size_t compute_strategy_id, int32_t pipel
     auto& dg_union = op->device_group_union();
     // auto& ds_union = op->output(0)->cur_ds_union(); // 需要使用zero之前的
     auto before_zero_it = _ds_hierarchy_before_zero.find(op->output(0)->id());
-    HT_ASSERT(before_zero_it != _ds_hierarchy_before_zero.end()) << "cannot find the ds hierarchy of " << " before zero";
     HT_ASSERT(before_zero_it != _ds_hierarchy_before_zero.end())
       << "cannot find the ds hierarchy of " << op->input(0)->producer() << " before zero"
       << ", note no zero should also have it";
