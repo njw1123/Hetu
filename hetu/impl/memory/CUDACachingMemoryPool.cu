@@ -39,19 +39,19 @@ void CUDACachingMemoryPool::FreePtr(void* ptr) {
   }
 }
 
-bool AllocAfterFreeFromCUDACache(const Device& device, void*& ptr, size_t size) {
-  auto caching_mempool = std::dynamic_pointer_cast<CUDACachingMemoryPool>(GetMemoryPool(device));
-  std::lock_guard<std::mutex> lock(caching_mempool->_mtx);
-  return caching_mempool->AllocPtr(ptr, size) || caching_mempool->WaitUntilAlloc(ptr, size);
-}
+// bool AllocAfterFreeFromCUDACache(const Device& device, void*& ptr, size_t size) {
+//   auto caching_mempool = std::dynamic_pointer_cast<CUDACachingMemoryPool>(GetMemoryPool(device));
+//   std::lock_guard<std::mutex> lock(caching_mempool->_mtx);
+//   return caching_mempool->AllocPtr(ptr, size) || caching_mempool->WaitUntilAlloc(ptr, size);
+// }
 
-void FreeFromCUDACache(const Device& device, void* ptr) {
-  // corresponding to AllocAfterFreeFromCUDACache
-  // the caller should hold the mutex
-  // should only be used in param buffer
-  auto caching_mempool = std::dynamic_pointer_cast<CUDACachingMemoryPool>(GetMemoryPool(device));
-  caching_mempool->FreePtr(ptr);
-}
+// void FreeFromCUDACache(const Device& device, void* ptr) {
+//   // corresponding to AllocAfterFreeFromCUDACache
+//   // the caller should hold the mutex
+//   // should only be used in param buffer
+//   auto caching_mempool = std::dynamic_pointer_cast<CUDACachingMemoryPool>(GetMemoryPool(device));
+//   caching_mempool->FreePtr(ptr);
+// }
 
 void ProfileAfterEmptyAllCUDACache(const Device& device) {
   auto caching_mempool = std::dynamic_pointer_cast<CUDACachingMemoryPool>(GetMemoryPool(device));
@@ -1211,8 +1211,25 @@ static size_t ParsePreAllocateSize() {
   return pre_allocate_size_mb * 1024 * 1024;
 }
 
+bool ParseUseTorchMemoryPool() {
+    const char* env_str = std::getenv("HETU_USE_TORCH_MEMORY_POOL");
+  if (env_str != nullptr) {
+    try {
+      return std::stoi(env_str) != 0;
+    } catch (const std::exception& e) {
+      HT_LOG_ERROR << "Invalid HETU_USE_TORCH_MEMORY_POOL environment variable value: " << env_str 
+                  << ", please provide an integer, default value will be used in this process.";
+    }
+  }
+  return false;
+}
+
 struct CUDACachingMemoryPoolRegister {
   CUDACachingMemoryPoolRegister() { 
+    if (ParseUseTorchMemoryPool()){
+      return;
+    }
+    HT_LOG_INFO << "CUDACachingMemoryPoolRegister constructor started.";
     std::call_once(cuda_caching_memory_pool_register_flag, []() {
       size_t _max_split_size = ParseMaxSplitSize();
       size_t _max_internal_fragment_size = ParseMaxInternalFragmentSize();

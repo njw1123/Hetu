@@ -761,7 +761,7 @@ NDArrayList AllReduceOpImpl::DoCompute(Operator& op,
                                        RuntimeContext& ctx) const {
   // NDArrayList outputs = inplace() ? inputs : DoAllocOutputs(op, inputs, ctx);
   NDArrayList outputs = inplace() && !ctx.has_runtime_allocation(op->output(0)->id()) ? inputs : DoAllocOutputs(op, inputs, ctx); 
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::AllReduce, inputs.at(0),
                                   outputs.at(0), reduction_type(), _comm_group, // _comm_group is a subset of placement_group
                                   op->instantiation_ctx().stream());
@@ -770,7 +770,7 @@ NDArrayList AllReduceOpImpl::DoCompute(Operator& op,
 
 void AllReduceOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
                                 NDArrayList& outputs, RuntimeContext& runtime_ctx) const {
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::AllReduce, inputs.at(0),
                                   outputs.at(0), reduction_type(), _comm_group, // _comm_group is a subset of placement_group
                                   op->instantiation_ctx().stream());                          
@@ -833,7 +833,7 @@ void P2PSendOpImpl::DoCompute(Operator& op,
   }
 
   // HT_LOG_INFO << "rank " << hetu::impl::comm::DeviceToWorldRank(op->instantiation_ctx().placement) << " will send to rank " << hetu::impl::comm::DeviceToWorldRank(_dst_group.get(dst_device_index));
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), 
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), 
                                   type(), hetu::impl::P2PSend, input,
                                   _dst_group.get(dst_device_index), comm_group_ranks, 
                                   op->instantiation_ctx().stream());                                 
@@ -891,7 +891,7 @@ void P2PRecvOpImpl::DoCompute(Operator& op,
   }
 
   // HT_LOG_INFO << "rank " << hetu::impl::comm::DeviceToWorldRank(op->instantiation_ctx().placement) << " will recv from rank " << hetu::impl::comm::DeviceToWorldRank(_src_group.get(src_device_index));
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                   type(), hetu::impl::P2PRecv, outputs.at(0),
                                   _src_group.get(src_device_index), comm_group_ranks,
                                   op->instantiation_ctx().stream());
@@ -959,7 +959,7 @@ void BatchedISendIRecvOpImpl::DoCompute(Operator& op,
     return input->is_contiguous() ? input : NDArray::contiguous(input, op->instantiation_ctx().stream_index);
   });
 
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), 
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), 
                                   hetu::impl::BatchedISendIRecv, contig_inputs, _dst_devices, outputs, 
                                   _src_devices, _comm_devices, op->instantiation_ctx().stream());
 }
@@ -1034,7 +1034,7 @@ void AllGatherOpImpl::DoCompute(Operator& op,
     << "Data type mismatched for AllGather communication: " << inputs.at(0)->dtype()
     << " vs. " << op->input(0)->dtype();
 
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::AllGather, inputs.at(0), outputs.at(0), 
                                   _comm_group, get_gather_dim(), op->instantiation_ctx().stream());
 }
@@ -1106,7 +1106,7 @@ NDArrayList ReduceScatterOpImpl::DoCompute(Operator& op,
   }
   
   // HT_LOG_INFO << "comm group " << _comm_group
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::ReduceScatter, inputs.at(0), outputs.at(0), 
                                   reduction_type(), _comm_group, get_scatter_dim(), op->instantiation_ctx().stream());
   return outputs;
@@ -1120,7 +1120,7 @@ void ReduceScatterOpImpl::DoCompute(Operator& op,
     << "Data type mismatched for ReduceScatter communication: " << inputs.at(0)->dtype()
     << " vs. " << op->input(0)->dtype();
 
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::ReduceScatter, inputs.at(0), outputs.at(0), 
                                   reduction_type(), _comm_group, get_scatter_dim(), op->instantiation_ctx().stream());
 }
@@ -1193,7 +1193,7 @@ NDArrayList SplitAllGatherOpImpl::DoCompute(Operator& op,
     const auto& comm_groups = _comm_groups_list[i];
     // HT_LOG_INFO << op << " " << i << "-th comm groups is: " << comm_groups;
     for (const auto& comm_group : comm_groups) {
-      HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+      HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                       hetu::impl::AllGather, split_inputs.at(i),
                                       split_outputs.at(i), comm_group, 0,
                                       op->instantiation_ctx().stream());
@@ -1252,7 +1252,7 @@ NDArrayList SplitAllReduceOpImpl::DoCompute(Operator& op,
     const auto& comm_groups = _comm_groups_list[i];
     // HT_LOG_INFO << op << " " << i << "-th comm groups is: " << comm_groups;
     for (const auto& comm_group : comm_groups) {
-      HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+      HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                       hetu::impl::AllReduce, split_inputs.at(i),
                                       split_outputs.at(i), reduction_type(), comm_group,
                                       op->instantiation_ctx().stream());
@@ -1333,7 +1333,7 @@ NDArrayList SplitReduceScatterOpImpl::DoCompute(Operator& op,
     const auto& comm_groups = _comm_groups_list[i];
     // HT_LOG_INFO << op << " " << i << "-th comm groups is: " << comm_groups;
     for (const auto& comm_group : comm_groups) {
-      HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+      HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                       hetu::impl::ReduceScatter, split_inputs.at(i),
                                       split_outputs.at(i), reduction_type(), comm_group, 0,
                                       op->instantiation_ctx().stream());

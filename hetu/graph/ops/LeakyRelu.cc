@@ -39,7 +39,7 @@ void LeakyReluGradientOpImpl::DoCompute(Operator& op,const NDArrayList& inputs,
   << "This is caused by calling in-place forward calculation with a negative slope, "
   << "please call out-of-place version instead.";
 
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::LeakyReluGradient, inputs.at(0),
     inputs.at(1), get_alpha(), outputs.at(0), op->instantiation_ctx().stream());
 }

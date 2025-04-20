@@ -9,7 +9,7 @@ namespace graph {
 void InterpolateOpImpl::DoCompute(Operator& op,
                                   const NDArrayList& inputs, NDArrayList& outputs,
                                   RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::Interpolate, inputs.at(0),
                                   outputs.at(0), align_corners(), op->instantiation_ctx().stream());
 }
@@ -58,7 +58,7 @@ void InterpolateGradientOpImpl::DoCompute(Operator& op,
                                           const NDArrayList& inputs,
                                           NDArrayList& outputs,
                                           RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::InterpolateGradient,
     inputs.at(0), outputs.at(0), align_corners(), op->instantiation_ctx().stream());
 }

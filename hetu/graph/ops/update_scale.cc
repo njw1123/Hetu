@@ -7,7 +7,7 @@ namespace graph {
 void UpdateScaleOpImpl::DoCompute(Operator& op, 
                                   const NDArrayList& inputs, NDArrayList& outputs,
                                   RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::UpdateScale,
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::UpdateScale,
                                outputs.at(0), outputs.at(1), inputs.at(2), growth_factor(), backoff_factor(),  
                                growth_interval(), op->instantiation_ctx().stream());
 }

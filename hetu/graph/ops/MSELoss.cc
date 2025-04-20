@@ -14,7 +14,7 @@ void MSEOpImpl::DoCompute(Operator& op,
                           RuntimeContext& ctx) const {
   // NDArray unreduced =
   //   reduction() == kNONE ? outputs.at(0) : NDArray::empty_like(inputs.at(0));
-  // HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+  // HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
   //                                 hetu::impl::MSELoss, inputs.at(0),
   //                                 inputs.at(1), unreduced, op->instantiation_ctx().stream());
   // if (reduction() != kNONE) {
@@ -47,15 +47,15 @@ void MSEGradOpImpl::DoCompute(Operator& op, const NDArrayList& inputs, NDArrayLi
   NDArray broadcasted =
     reduction() == kNONE ? inputs.at(2) : NDArray::empty_like(inputs.at(0));
   if (reduction() == kMEAN) {
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
       op->instantiation_ctx().placement.type(), type(), hetu::impl::BroadcastShapeMul, inputs.at(2),
       1.0f / broadcasted->numel(), broadcasted, HTAxes(), op->instantiation_ctx().stream());
   } else if (reduction() == kSUM) {
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                     hetu::impl::BroadcastShape, inputs.at(2),
                                     broadcasted, HTAxes(), op->instantiation_ctx().stream());
   }
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::MSELossGradient,
     inputs.at(0), inputs.at(1), broadcasted, outputs.at(0), op->instantiation_ctx().stream());
 }

@@ -8,7 +8,7 @@ namespace graph {
 void CheckFiniteOpImpl::DoCompute(Operator& op, 
                                   const NDArrayList& inputs, NDArrayList& outputs,
                                   RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::CheckFinite,
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::CheckFinite,
                                inputs.at(0), outputs.at(0), op->instantiation_ctx().stream());
 }
 
@@ -33,7 +33,7 @@ Tensor MakeCheckFiniteOp(Tensor input, OpMeta op_meta) {
 void CheckNumericOpImpl::DoCompute(Operator& op, 
                                   const NDArrayList& inputs, NDArrayList& outputs,
                                   RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::CheckNumeric,
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::CheckNumeric,
                                inputs.at(0), outputs.at(0), op->instantiation_ctx().stream());
 }
 

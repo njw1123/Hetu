@@ -24,7 +24,7 @@ void SGDUpdateOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
   NDArray& param = outputs.at(0);
   const NDArray& grad = inputs.at(1);
   NDArray velocity;
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                   type(), hetu::impl::SGDUpdate, grad, param,
                                   velocity, learning_rate(), 0, false,
                                   op->instantiation_ctx().stream());
@@ -37,7 +37,7 @@ void SGDUpdateWithGradScalerOpImpl::DoCompute(Operator& op, const NDArrayList& i
   const NDArray& grad = inputs.at(1);
   const NDArray& infinite_count = inputs.at(2);
   NDArray velocity;
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(),
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(),
                                type(), hetu::impl::SGDUpdateWithGradScaler, grad, infinite_count, 
                                param, velocity, learning_rate(), 0, false,
                                op->instantiation_ctx().stream());
@@ -49,7 +49,7 @@ void MomentumUpdateOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
   NDArray& param = outputs.at(0);
   const NDArray& grad = inputs.at(1);
   NDArray velocity = inputs.at(2);
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                   type(), hetu::impl::SGDUpdate, grad, param,
                                   velocity, learning_rate(), 0, false,
                                   op->instantiation_ctx().stream());
@@ -72,7 +72,7 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
     << "Currently only support equal ds union for param and grad";
   // 这里直接更新即可
   // 如何得到符合ds的grad以及后续的transfer param则交给exec graph中的comm op来做
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                   type(), hetu::impl::Adam, grad, param,
                                   mean, variance, step, learning_rate(step_num), 
                                   beta1(), beta2(), eps(), weight_decay(step_num), true,
@@ -92,7 +92,7 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
   int64_t step_num = inputs.at(4)->item<int64_t>();
   // 不开zero
   if (!_multi_zero.at(op->graph().OPTIMIZE_STRATEGY_ID)) {
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                     type(), hetu::impl::Adam, grad, param,
                                     mean, variance, step, learning_rate(step_num), 
                                     beta1(), beta2(), eps(), weight_decay(step_num), true,
@@ -132,14 +132,14 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
                      .set_device(param->device()), 
         param->storage(), param->storage_offset() + param_start_index);
       // only update scatter part of param
-      HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
+      HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                       type(), hetu::impl::Adam, grad, param_scatter,
                                       mean, variance, step, learning_rate(step_num), 
                                       beta1(), beta2(), eps(), weight_decay(step_num), true,
                                       op->instantiation_ctx().stream());
       // in-place allgather
       // gather dim和scatter dim对齐
-      HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), 
+      HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), 
                                       hetu::impl::AllGather, param_scatter, param, 
                                       comm_group, scatter_dim, op->instantiation_ctx().stream());
     }
@@ -188,7 +188,7 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
           split_param.at(i)->storage(), split_param.at(i)->storage_offset() + param_start_index);
         // only update scatter part of param
         // 注意这里只有最后一次需要更新step
-        HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
+        HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(),
                                         type(), hetu::impl::Adam, split_grad.at(i), split_param_scatter,
                                         split_mean.at(i), split_variance.at(i), step, learning_rate(step_num), 
                                         beta1(), beta2(), eps(), weight_decay(step_num), i == split_num - 1 ? true : false,
@@ -197,7 +197,7 @@ void AdamOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
         for (const auto& comm_group : comm_groups) {
           // in-place allgather
           // 目前只支持在第0维split scatter和split gather
-          HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+          HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                           hetu::impl::AllGather, split_param_scatter,
                                           split_param.at(i), comm_group, 0,
                                           op->instantiation_ctx().stream());

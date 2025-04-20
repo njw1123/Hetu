@@ -63,7 +63,7 @@ void VocabParallelCrossEntropyOpImpl::DoCompute(
     // 1. x = x_ori - x_max
     NDArray reduce_max_partial = NDArray::reduce(preds, kMAX, {-1}, true, op->instantiation_ctx().stream_index); // split1 -> partial, cuda malloc
     NDArray reduce_max = reduce_max_partial;
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), // partial -> dup, inplace
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), // partial -> dup, inplace
                                     hetu::impl::AllReduce, reduce_max_partial,
                                     reduce_max, kMAX, _comm_group,
                                     op->instantiation_ctx().stream());
@@ -74,7 +74,7 @@ void VocabParallelCrossEntropyOpImpl::DoCompute(
     NDArray exp_logits = NDArray::exp(vocab_parallel_logits, op->instantiation_ctx().stream_index); // cuda malloc
     NDArray sum_exp_logits_partial = NDArray::reduce(exp_logits, kSUM, {-1}, true, op->instantiation_ctx().stream_index); // split1 -> partial, cuda malloc
     NDArray sum_exp_logits = sum_exp_logits_partial;
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), // partial -> dup, inplace
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), // partial -> dup, inplace
                                     hetu::impl::AllReduce, sum_exp_logits_partial,
                                     sum_exp_logits, kSUM, _comm_group,
                                     op->instantiation_ctx().stream());
@@ -95,12 +95,12 @@ void VocabParallelCrossEntropyOpImpl::DoCompute(
     auto vocab_end_index = vocab_start_index + vocab_size_per_partition;
     HTShape predict_logits_shape = {preds->shape(0), 1};
     NDArray predict_logits_partial = NDArray::empty(predict_logits_shape, preds->device(), preds->dtype()); // cuda malloc
-    HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+    HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                 hetu::impl::VocabParallelCrossEntropy, vocab_parallel_logits,
                                 labels, vocab_start_index, vocab_end_index, ignored_index(),
                                 predict_logits_partial, log_sum_exp_logits, op->instantiation_ctx().stream());
     NDArray predict_logits = predict_logits_partial;
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), // partial -> dup, inplace
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), // partial -> dup, inplace
                                     hetu::impl::AllReduce, predict_logits_partial,
                                     predict_logits, kSUM, _comm_group,
                                     op->instantiation_ctx().stream());
@@ -186,18 +186,18 @@ void VocabParallelCrossEntropyGradientOpImpl::DoCompute(
                                            preds->device(), preds->dtype());
   // grad = (softmax(prediction) - labels) / N
   if (reduction() == kMEAN) {
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
       op->instantiation_ctx().placement.type(), type(), hetu::impl::BroadcastShapeMul, grad_output,
       1.0f / broadcasted->numel(), broadcasted, HTAxes(), op->instantiation_ctx().stream());
   } else if (reduction() == kSUM) {
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                     hetu::impl::BroadcastShape, grad_output,
                                     broadcasted, HTAxes(), op->instantiation_ctx().stream());
   }
 
   if (op->input(0)->get_local_distributed_states().get_dim(1) == 1) {
     // no tp vocab parallel, just pure dp
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
       op->instantiation_ctx().placement.type(), type(), hetu::impl::SoftmaxCrossEntropySparseGradient,
       preds, labels, broadcasted, outputs.at(0), ignored_index(), op->instantiation_ctx().stream());
   } else {
@@ -209,7 +209,7 @@ void VocabParallelCrossEntropyGradientOpImpl::DoCompute(
     auto vocab_end_index = vocab_start_index + vocab_size_per_partition;
     NDArray softmax = ctx.get_or_create(op->fw_op_id()).pop<NDArray>("softmax");
 
-    HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+    HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                 hetu::impl::VocabParallelCrossEntropyGradient, softmax,
                                 labels, vocab_start_index, vocab_end_index, ignored_index(), 
                                 broadcasted, outputs.at(0), op->instantiation_ctx().stream());

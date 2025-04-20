@@ -12,7 +12,7 @@ void AttentionOpImpl::DoCompute(Operator& op,
                                 RuntimeContext& ctx) const {
   
   double softmax_scale_ = softmax_scale() >= 0 ? softmax_scale() : std::pow(inputs.at(0)->shape(3), -0.5);
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttn,
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttn,
                                inputs.at(0), inputs.at(1), inputs.at(2), outputs.at(0), outputs.at(1),
                                outputs.at(2), outputs.at(3), outputs.at(4), outputs.at(5),
                                outputs.at(6), outputs.at(7), p_dropout(), softmax_scale_,
@@ -66,7 +66,7 @@ HTShapeList AttentionOpImpl::DoInferShape(Operator& op,
 void AttentionGradientOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
                                         NDArrayList& outputs, RuntimeContext& ctx) const {
   double softmax_scale_ = softmax_scale() >= 0 ? softmax_scale() : std::pow(inputs.at(1)->shape(3), -0.5);
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                hetu::impl::FlashAttnGradient, inputs.at(0),
                                inputs.at(1), inputs.at(2), inputs.at(3), const_cast<NDArray&>(inputs.at(4)),
                                const_cast<NDArray&>(inputs.at(5)), const_cast<NDArray&>(inputs.at(6)), 
@@ -91,7 +91,7 @@ void AttentionVarlenOpImpl::DoCompute(Operator& op,
   auto v = NDArray::view(inputs.at(2), {batch_size_mul_seq_len, k_num_heads, head_dim()});
   auto out = NDArray::view(outputs.at(0), {batch_size_mul_seq_len, q_num_heads, head_dim()});
   double softmax_scale_ = softmax_scale() >= 0 ? softmax_scale() : std::pow(inputs.at(0)->shape(3), -0.5);
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttnVarlen,
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttnVarlen,
                                q, k, v, inputs.at(3), inputs.at(4),
                                out, outputs.at(1),
                                outputs.at(2), outputs.at(3), outputs.at(4), outputs.at(5),
@@ -162,7 +162,7 @@ void AttentionVarlenGradientOpImpl::DoCompute(Operator& op,const NDArrayList& in
   auto dv = NDArray::view(outputs.at(2), {batch_size_mul_seq_len, k_num_heads, head_dim()});
   auto acc_out = NDArray::view(inputs.at(6), {batch_size_mul_seq_len, q_num_heads, head_dim()});
   double softmax_scale_ = softmax_scale() >= 0 ? softmax_scale() : std::pow(inputs.at(1)->shape(3), -0.5);
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                hetu::impl::FlashAttnVarlenGradient, reshaped_grad_output,
                                q, k, v, inputs.at(4), 
                                inputs.at(5), const_cast<NDArray&>(acc_out),

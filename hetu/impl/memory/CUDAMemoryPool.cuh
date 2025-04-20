@@ -5,6 +5,9 @@
 namespace hetu {
 namespace impl {
 
+extern bool use_torch_memory_pool;
+
+
 class CUDAMemoryPool : public MemoryPool {
  public:
   CUDAMemoryPool(DeviceIndex device_id, std::string&& name)
@@ -16,6 +19,11 @@ class CUDAMemoryPool : public MemoryPool {
     return 256;
   }
 };
+
+
+bool AllocAfterFreeFromCUDACache(const Device& device, void*& ptr, size_t size);
+
+void FreeFromCUDACache(const Device& device, void* ptr);
 
 } // namespace impl
 } // namespace hetu

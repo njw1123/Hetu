@@ -21,7 +21,7 @@ TensorList HardsigmoidOpImpl::DoGradient(Operator& op, const TensorList& grad_ou
 
 void HardsigmoidGradientOpImpl::DoCompute(Operator& op,const NDArrayList& inputs,
                                   NDArrayList& outputs, RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                hetu::impl::HardsigmoidGradient, inputs.at(0),
                                inputs.at(1), outputs.at(0), op->instantiation_ctx().stream());
 }

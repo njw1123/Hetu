@@ -73,15 +73,15 @@ void SCESGradOpImpl::DoCompute(Operator& op,
                        inputs.at(0)->dtype(),
                        op->instantiation_ctx().stream_index);
     if (reduction() == kMEAN) {
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
       op->instantiation_ctx().placement.type(), type(), hetu::impl::BroadcastShapeMul, inputs.at(2),
       1.0f / broadcasted->numel(), broadcasted, HTAxes(), op->instantiation_ctx().stream());
   } else if (reduction() == kSUM) {
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                     hetu::impl::BroadcastShape, inputs.at(2),
                                     broadcasted, HTAxes(), op->instantiation_ctx().stream());
   }
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::SoftmaxCrossEntropySparseGradient,
     inputs.at(0), inputs.at(1), broadcasted, outputs.at(0), ignored_index(), op->instantiation_ctx().stream());
 }

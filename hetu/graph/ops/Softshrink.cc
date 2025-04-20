@@ -21,7 +21,7 @@ TensorList SoftshrinkOpImpl::DoGradient(Operator& op, const TensorList& grad_out
 
 void SoftshrinkGradientOpImpl::DoCompute(Operator& op,const NDArrayList& inputs,
                                   NDArrayList& outputs, RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                hetu::impl::SoftshrinkGradient, inputs.at(0),
                                inputs.at(1), lambda(),
                                outputs.at(0), op->instantiation_ctx().stream());

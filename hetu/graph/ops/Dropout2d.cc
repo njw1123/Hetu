@@ -18,7 +18,7 @@ void Dropout2dOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
   if (op->op_meta().origin_op_id != -1) {
     seed = ctx.get_or_create(op->op_meta().origin_op_id).get<uint64_t>("seed");
   }
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                 hetu::impl::Dropout2d, inputs.at(0), 1 - keep_prob(),
                                 seed, outputs.at(0), outputs.at(1), op->instantiation_ctx().stream());
 };
@@ -66,7 +66,7 @@ void Dropout2dOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& outpu
 void Dropout2dGradientOpImpl::DoCompute(Operator& op, const NDArrayList& inputs,
                                         NDArrayList& outputs,
                                         RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CUDA_ONLY(
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::Dropout2dGradient,
     inputs.at(0), inputs.at(1), 1 - keep_prob(), outputs.at(0), op->instantiation_ctx().stream());
 }

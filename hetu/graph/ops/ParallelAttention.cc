@@ -784,7 +784,7 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
     if (!is_bwd) {
       // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnCuda begin, q idx = " << q_idx << " and kv idx = " << kv_idx << ", q_slice is " << q_slice << " and k_slice (similar to v_slice) is " << k_slice;
       // 这里的softmax_lse与out都是一个block的局部的输出
-      HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttn", hetu::impl::FlashAttn,
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttn", hetu::impl::FlashAttn,
                                    q_slice, k_slice, v_slice, out, q_slice,
                                    k_slice, v_slice, out_slice, softmax_lse_slice,
                                    empty_ndarray, rng_state, _p_dropout, _softmax_scale,
@@ -799,7 +799,7 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
     } else {
       // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnGradientCuda begin";
       // 这里的softmax_lse与out则是全部block累积的
-      HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttnGradient", hetu::impl::FlashAttnGradient,
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttnGradient", hetu::impl::FlashAttnGradient,
                                    grad_output_slice, q_slice, k_slice, v_slice, out_slice, softmax_lse_slice, rng_state, 
                                    dq_slice, dk_slice, dv_slice, _p_dropout, _softmax_scale,
                                    is_causal, Stream(_local_device, _stream_idx));
@@ -813,7 +813,7 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
       HT_LOG_TRACE << _local_device << ": before attn " << q_idx << "-th q slice sum is " << NDArray::sum(q_slice) << " and " << kv_idx << "-th k(v) slice sum is " << NDArray::sum(k_slice)
         << ", q slice shape is " << q_slice->shape() << ", k slice shape is " << k_slice->shape()
         << ", valid cu_seqlens_q is " << attn_info->get_valid_cu_seqlens_q() << ", valid cu_seqlens_k is " << attn_info->get_valid_cu_seqlens_k();
-      HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttnVarlen", hetu::impl::FlashAttnVarlen, 
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttnVarlen", hetu::impl::FlashAttnVarlen, 
                                    q_slice, k_slice, v_slice, attn_info->get_valid_cu_seqlens_q(), attn_info->get_valid_cu_seqlens_k(), 
                                    out_slice, q_slice, k_slice, v_slice, out_slice, softmax_lse_slice,
                                    empty_ndarray, rng_state, _max_seqlen_q, _max_seqlen_k, 
@@ -828,7 +828,7 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
     } else {
       HT_LOG_TRACE << _local_device << ": before attn " << q_idx << "-th q slice sum is " << NDArray::sum(q_slice) << " and " << kv_idx << "-th k(v) slice sum is " << NDArray::sum(k_slice)
         << ", valid cu_seqlens_q is " << attn_info->get_valid_cu_seqlens_q() << ", valid cu_seqlens_k is " << attn_info->get_valid_cu_seqlens_k();
-      HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttnVarlenGradient", hetu::impl::FlashAttnVarlenGradient, 
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttnVarlenGradient", hetu::impl::FlashAttnVarlenGradient, 
                                    grad_output_slice, q_slice, k_slice, v_slice, attn_info->get_valid_cu_seqlens_q(), attn_info->get_valid_cu_seqlens_k(), 
                                    out_slice, softmax_lse_slice, rng_state, 
                                    dq_slice, dk_slice, dv_slice, _max_seqlen_q, _max_seqlen_k,
@@ -926,7 +926,7 @@ void AttnCommRing::ExecComm(const NDArray& send_data, const NDArray& recv_data,
   /*
   int64_t num_heads_offset = 0;
   for (size_t i = 0; i < src_split_num; i++) {
-    HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "AttnCommConcatRecvSlices",
+    HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(DeviceType::CUDA, "AttnCommConcatRecvSlices",
                                  hetu::impl::Concatenate, recv_data_slices[i],
                                  const_cast<NDArray&>(recv_data), num_heads_dim, num_heads_offset, 
                                  comm_stream);
@@ -1391,7 +1391,7 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
                                                    kFloat,
                                                    stream_idx);
       attn_ctx()->acc_out = reshaped_output;
-      HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttn,
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttn,
                                    q, k, v, attn_ctx()->acc_out, q,
                                    k, v, attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse,
                                    empty_ndarray, attn_ctx()->rng_state_list.at(0), p_dropout(), softmax_scale_,
@@ -1419,7 +1419,7 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
       attn_ctx()->acc_out = NDArray::view(reshaped_output, {batch_size_mul_seq_len, q_num_heads, _head_dim});
       HT_LOG_TRACE << "varlen attn fwd inputs: cu_seqlens_q is " << cu_seqlens_q << " cu_seqlens_k is " << cu_seqlens_k
         << ", q shape is " << attn_ctx()->q->shape() << ", q sum is " << NDArray::sum(attn_ctx()->q);
-      HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttnVarlen, 
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttnVarlen, 
                                    attn_ctx()->q, attn_ctx()->k, attn_ctx()->v, cu_seqlens_q, cu_seqlens_k, attn_ctx()->acc_out, attn_ctx()->q,
                                    attn_ctx()->k, attn_ctx()->v, attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse,
                                    empty_ndarray, attn_ctx()->rng_state_list.at(0), 
@@ -1618,7 +1618,7 @@ void ParallelAttentionGradientOpImpl::DoCompute(Operator& op, const NDArrayList&
       << "there should only be one single rng_state when cp is off"
       << ", but for attn ctx of mirco batch " << _attn_ctx_num << ", the rng_state num is " << attn_ctx()->rng_state_list.size();
     if (!_packing) {
-      HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                    hetu::impl::FlashAttnGradient, reshaped_grad_output,
                                    attn_ctx()->q, attn_ctx()->k, attn_ctx()->v, attn_ctx()->acc_out,
                                    attn_ctx()->acc_softmax_lse, attn_ctx()->rng_state_list.at(0), 
@@ -1627,13 +1627,13 @@ void ParallelAttentionGradientOpImpl::DoCompute(Operator& op, const NDArrayList&
       // flash-attn already supports uncontiguous outputs
       /*
       // concat dq, dk, dv to reshaped_grad_input
-      HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::Concatenate, dq,
                                   reshaped_grad_input, 2, 0, op->instantiation_ctx().stream());
-      HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::Concatenate, dk,
                                   reshaped_grad_input, 2, q_num_heads, op->instantiation_ctx().stream());
-      HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::Concatenate, dv,
                                   reshaped_grad_input, 2, q_num_heads + kv_num_heads, op->instantiation_ctx().stream());
       */
@@ -1661,7 +1661,7 @@ void ParallelAttentionGradientOpImpl::DoCompute(Operator& op, const NDArrayList&
       HT_LOG_TRACE << "varlen attn bwd inputs: cu_seqlens_q is " << cu_seqlens_q << " cu_seqlens_k is " << cu_seqlens_k
         << ", q shape is " << attn_ctx()->q->shape() << ", softmax_lse shape is " << attn_ctx()->acc_softmax_lse->shape()
         << ", q sum is " << NDArray::sum(attn_ctx()->q) << ", softmax_lse sum is " << NDArray::sum(attn_ctx()->acc_softmax_lse);
-      HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                    hetu::impl::FlashAttnVarlenGradient, reshaped_grad_output,
                                    attn_ctx()->q, attn_ctx()->k, attn_ctx()->v, cu_seqlens_q, cu_seqlens_k, 
                                    attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse, attn_ctx()->rng_state_list.at(0), 

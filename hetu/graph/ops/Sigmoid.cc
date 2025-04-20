@@ -31,7 +31,7 @@ TensorList SigmoidOpImpl::DoGradient(Operator& op, const TensorList& grad_output
 void SigmoidGradientOpImpl::DoCompute(Operator& op, 
                               const NDArrayList& inputs, NDArrayList& outputs,
                               RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::SigmoidGradient, inputs.at(0), inputs.at(1),
                                   outputs.at(0), op->instantiation_ctx().stream());
 }

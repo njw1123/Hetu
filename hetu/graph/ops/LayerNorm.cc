@@ -78,7 +78,7 @@ void LayerNormOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_heter
 void LayerNormGradientOpImpl::DoCompute(Operator& op,const NDArrayList& inputs,
                                        NDArrayList& outputs,
                                        RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::LayerNormGradient, inputs.at(0),
     inputs.at(1), inputs.at(2), outputs.at(0), outputs.at(1),
     outputs.at(2), inputs.at(3), inputs.at(4), normalized_shape().size(),
@@ -200,7 +200,7 @@ void FusedLayerNormOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_
 void FusedLayerNormGradientOpImpl::DoCompute(Operator& op,const NDArrayList& inputs,
                                        NDArrayList& outputs,
                                        RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CUDA_ONLY(
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::FusedLayerNormGradient, inputs.at(0),
     inputs.at(1), inputs.at(2), inputs.at(3), outputs.at(0), outputs.at(1),
     outputs.at(2), inputs.at(4), inputs.at(5), normalized_shape().size(),

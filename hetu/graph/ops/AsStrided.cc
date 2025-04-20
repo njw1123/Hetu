@@ -77,7 +77,7 @@ void AsStridedGradientOpImpl::DoCompute(Operator& op,
   HTShape in_shape = in_meta.shape;
   HTStride in_stride = in_meta.stride;
 
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                hetu::impl::AsStridedGradient, inputs.at(0),
                                outputs.at(0), outshape(), stride(), in_shape, in_stride,
                                in_offset, out_offset, op->instantiation_ctx().stream());

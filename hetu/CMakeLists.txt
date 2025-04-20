@@ -17,7 +17,8 @@ list(FILTER HETU_SRC EXCLUDE REGEX "${HETU_SRC_DIR}/hetu/v1/*")
 add_library(hetu_C SHARED ${HETU_SRC})
 
 # Set CMake prefix path
-set(CMAKE_PREFIX_PATH $ENV{GRPC_CMAKE_PREFIX_PATH})
+list(APPEND CMAKE_PREFIX_PATH $ENV{GRPC_CMAKE_PREFIX_PATH})
+message("CMAKE_PREFIX_PATH: ${CMAKE_PREFIX_PATH}")
 include(../cmake/grpc.cmake)
 
 # Get proto file paths
@@ -61,6 +62,25 @@ add_library(hetu_grpc_proto STATIC
 )
 set_target_properties(hetu_grpc_proto PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+message("preparing libtorch...")
+# set(TORCH_CUDA_ARCH_LIST "8.9" CACHE STRING "CUDA architectures for PyTorch" FORCE)
+# # 获取PyTorch信息
+# set(Torch_DIR "${CMAKE_SOURCE_DIR}/third_party/libtorch")
+# find_package(Torch PATHS ${Torch_DIR} NO_DEFAULT_PATH REQUIRED)
+find_package(Torch REQUIRED)
+if(TORCH_FOUND)
+  # 获取torch真正的位置
+  get_target_property(TORCH_ACTUAL_PATH torch INTERFACE_INCLUDE_DIRECTORIES)
+  message("libtorch found at: ${TORCH_ACTUAL_PATH}")
+  message("TORCH_CXX_FLAGS: ${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+  target_link_libraries(hetu_C PUBLIC ${TORCH_LIBRARIES})
+  target_include_directories(hetu_C PUBLIC ${TORCH_INCLUDE_DIRS})
+  target_compile_definitions(hetu_C PUBLIC -DTORCH_AVAILABLE)
+endif(TORCH_FOUND)
+message("preparing libtorch done")
+
+
 # Link libraries
 target_link_libraries(hetu_grpc_proto
   ${_REFLECTION}
@@ -82,6 +102,7 @@ target_link_libraries(hetu_C
 
 target_include_directories(hetu_C PUBLIC ${HETU_SRC_DIR})
 
+
 # OpenMP support
 if(${HETU_COMPILE_OMP})
   target_link_libraries(hetu_C PUBLIC MPI::MPI_CXX)
@@ -98,6 +119,40 @@ if(${HETU_COMPILE_CUDNN})
   find_package(CUDNN 7.5 REQUIRED)
   target_link_libraries(hetu_C PUBLIC ${CUDNN_LIBRARY_PATH})
   target_include_directories(hetu_C PUBLIC ${CUDNN_INCLUDE_PATH})
+endif()
+
+# CUPTI support, beacuse libtorch need cupti
+if(${HETU_COMPILE_CUPTI})
+  message("preparing cupti")
+  find_library(CUPTI_LIBRARY cupti HINTS /usr/local/cuda/extras/CUPTI/lib64)
+  message("CUPTI_LIBRARY: ${CUPTI_LIBRARY}")
+  target_link_libraries(hetu_C PUBLIC ${CUPTI_LIBRARY})
+
+  # 添加 include 路径（已写）
+  include_directories(/usr/local/cuda/extras/CUPTI/include)
+
+  # 添加 RPATH 以确保运行时也能找到
+  set_target_properties(hetu_C PROPERTIES
+    INSTALL_RPATH "/usr/local/cuda/extras/CUPTI/lib64"
+    BUILD_RPATH "/usr/local/cuda/extras/CUPTI/lib64"
+  )
+  message("preparing cupti done")
+endif()
+
+# message("CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
+# DNNL support
+if(${HETU_COMPILE_DNNL})
+  find_package(DNNL)
+  if(NOT DNNL_FOUND)
+    message("dnnl not found, preparing...")
+    include(${CMAKE_SOURCE_DIR}/cmake/external/dnnl.cmake)
+    target_link_libraries(hetu_C PUBLIC ${DNNL_DLL_PATH})
+    target_include_directories(hetu_C PUBLIC ${DNNL_INCLUDE_DIR})
+    add_dependencies(hetu_C project_dnnl)
+  else()
+    target_link_libraries(hetu_C PUBLIC ${DNNL_LIBRARY})
+    target_include_directories(hetu_C PUBLIC ${DNNL_BUILD_INCLUDE_DIR})
+  endif()
 endif()
 
 # NCCL support
@@ -121,20 +176,30 @@ if(${HETU_COMPILE_NVML})
   target_include_directories(hetu_C PUBLIC ${NVML_INCLUDE_DIRS})
 endif()
 
-# DNNL support
-if(${HETU_COMPILE_DNNL})
-  find_package(DNNL)
-  if(NOT DNNL_FOUND)
-    message("dnnl not found, preparing...")
-    include(${CMAKE_SOURCE_DIR}/cmake/external/dnnl.cmake)
-    target_link_libraries(hetu_C PUBLIC ${DNNL_DLL_PATH})
-    target_include_directories(hetu_C PUBLIC ${DNNL_INCLUDE_DIR})
-    add_dependencies(hetu_C project_dnnl)
-  else()
-    target_link_libraries(hetu_C PUBLIC ${DNNL_LIBRARY})
-    target_include_directories(hetu_C PUBLIC ${DNNL_BUILD_INCLUDE_DIR})
-  endif()
-endif()
+
+
+
+message("preparing libtorch...")
+# set(TORCH_CUDA_ARCH_LIST "8.9" CACHE STRING "CUDA architectures for PyTorch" FORCE)
+# # 获取PyTorch信息
+# set(Torch_DIR "${CMAKE_SOURCE_DIR}/third_party/libtorch")
+# find_package(Torch PATHS ${Torch_DIR} NO_DEFAULT_PATH REQUIRED)
+find_package(Torch REQUIRED)
+if(TORCH_FOUND)
+  # 获取torch真正的位置
+  get_target_property(TORCH_ACTUAL_PATH torch INTERFACE_INCLUDE_DIRECTORIES)
+  message("libtorch found at: ${TORCH_ACTUAL_PATH}")
+  message("TORCH_CXX_FLAGS: ${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+  target_link_libraries(hetu_C PUBLIC ${TORCH_LIBRARIES})
+  target_include_directories(hetu_C PUBLIC ${TORCH_INCLUDE_DIRS})
+  target_compile_definitions(hetu_C PUBLIC -DTORCH_AVAILABLE)
+endif(TORCH_FOUND)
+message("preparing libtorch done")
+
+
+
+
 
 # Flash Attention support
 if(${USE_FLASH_ATTN})

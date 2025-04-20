@@ -57,7 +57,7 @@
 //         fusedgroup.num_tensors = sub.output_idx[i][j] + 1;
 //     }
 //   }
-//   HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+//   HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
 //                                hetu::impl::FusedGroup, inputs, fusedgroup,
 //                                outputs, op->instantiation_ctx().stream());
 // }

@@ -86,7 +86,7 @@ void EmbeddingLookupGradientOpImpl::DoCompute(Operator& op,
   NDArray id_offset = inputs.at(1);
   if (offset(op) != 0) 
     id_offset = NDArray::sub(inputs.at(1), offset(op), op->instantiation_ctx().stream_index);
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::EmbeddingLookupGradient,
     inputs.at(0), id_offset, outputs.at(0), op->instantiation_ctx().stream());
 }

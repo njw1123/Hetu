@@ -32,7 +32,7 @@ TensorList SqrtOpImpl::DoGradient(Operator& op, const TensorList& grad_outputs) 
 void ReciprocalSqrtOpImpl::DoCompute(Operator& op,const NDArrayList& inputs,
                                      NDArrayList& outputs, 
                                      RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::ReciprocalSqrt, inputs.at(0),
                                   outputs.at(0), op->instantiation_ctx().stream());
 }

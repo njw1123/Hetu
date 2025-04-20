@@ -84,7 +84,7 @@ void ConcatOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& outputs,
 void ConcatGradientOpImpl::DoCompute(Operator& op,
                                      const NDArrayList& inputs,
                                      NDArrayList& outputs, RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CUDA_ONLY(
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::ConcatGradient, 
     inputs.at(0), outputs, get_axis(), op->instantiation_ctx().stream());
 }

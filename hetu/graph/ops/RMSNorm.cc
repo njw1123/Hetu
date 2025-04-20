@@ -31,7 +31,7 @@ void RMSNormOpImpl::DoCompute(Operator& op,
   NDArray rowscalemat = rowscale_.is_defined() ? NDArray::view(rowscale_, {-1}) : rowscale_;
   NDArray x0_subsetmat = x0_subset_.is_defined() ? NDArray::view(x0_subset_, {-1}) : x0_subset_;
   NDArray out_subsetmet = z_subset_.is_defined() ? NDArray::view(z_subset_, {-1}) : z_subset_;
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::DropoutAddLnFwd,
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::DropoutAddLnFwd,
                                x0mat, residualmat, gamma, beta_, rowscalemat, colscale_, x0_subsetmat, out_subsetmet,
                                z, x, dmask, mu, rsigma, dropout_p(), epsilon(), rowscale_const(), z_numrows(),
                                residual_in_fp32(), is_rms_norm(), op->instantiation_ctx().stream());
@@ -159,7 +159,7 @@ void RMSNormGradientOpImpl::DoCompute(Operator& op,const NDArrayList& inputs,
   NDArray dbeta_part = NDArray(); 
   NDArray dcolscale_part = NDArray();
 
-  HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                hetu::impl::DropoutAddLnBwd, dzmat, dxmat, xmat, x0mat, dmask_, mu,
                                rsigma, gamma, rowscalemat, colscale_, x0_subsetmat, out_subsetmat,
                                dx0, dresidual, dgamma, dbeta, dgamma_part, dbeta_part, dcolscale,
@@ -305,7 +305,7 @@ void FusedRMSNormOpImpl::DoDeduceHeterProp(const std::vector<int32_t>& inputs_he
 void FusedRMSNormGradientOpImpl::DoCompute(Operator& op,const NDArrayList& inputs,
                                            NDArrayList& outputs,
                                            RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CUDA_ONLY(
+  HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::FusedRMSNormGradient, inputs.at(0),
     inputs.at(1), inputs.at(2), outputs.at(0), outputs.at(1),
     inputs.at(3),normalized_shape().size(),

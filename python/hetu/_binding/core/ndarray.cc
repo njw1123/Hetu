@@ -289,7 +289,7 @@ PyObject* PyNDArray_slice(PyNDArray* self, PyObject* args, PyObject* kwargs) {
                               input->dtype(), kBlockingStream,
                               parsed_args.get_int64_list(1));
     Stream stream(input->device(), kBlockingStream);
-    HT_DISPATCH_KERNEL_CPU_AND_CUDA(input->device().type(), __FUNCTION__,
+    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(input->device().type(), __FUNCTION__,
                                     hetu::impl::Slice, input, out, 
                                     parsed_args.get_int64_list(0), stream);
     return PyNDArray_New(out);

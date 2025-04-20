@@ -50,9 +50,9 @@ struct AvailableEventLookupTable {
     }) {}
 };
 
-bool AllocAfterFreeFromCUDACache(const Device& device, void*& ptr, size_t size);
+// bool AllocAfterFreeFromCUDACache(const Device& device, void*& ptr, size_t size);
 
-void FreeFromCUDACache(const Device& device, void* ptr);
+// void FreeFromCUDACache(const Device& device, void* ptr);
 
 void ProfileAfterEmptyAllCUDACache(const Device& device);
 

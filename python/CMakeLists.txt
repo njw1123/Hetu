@@ -39,6 +39,27 @@ foreach(FILE ${GEN_OP_FILES})
   endif()
 endforeach()
 
+
+
+message("preparing libtorch...")
+# set(TORCH_CUDA_ARCH_LIST "8.9" CACHE STRING "CUDA architectures for PyTorch" FORCE)
+# # 获取PyTorch信息
+# set(Torch_DIR "${CMAKE_SOURCE_DIR}/third_party/libtorch")
+# find_package(Torch PATHS ${Torch_DIR} NO_DEFAULT_PATH REQUIRED)
+find_package(Torch REQUIRED)
+if(TORCH_FOUND)
+  # 获取torch真正的位置
+  get_target_property(TORCH_ACTUAL_PATH torch INTERFACE_INCLUDE_DIRECTORIES)
+  message("libtorch found at: ${TORCH_ACTUAL_PATH}")
+  message("TORCH_CXX_FLAGS: ${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+  target_link_libraries(hetu_C PUBLIC ${TORCH_LIBRARIES})
+  target_include_directories(hetu_C PUBLIC ${TORCH_INCLUDE_DIRS})
+  target_compile_definitions(hetu_C PUBLIC -DTORCH_AVAILABLE)
+endif(TORCH_FOUND)
+message("preparing libtorch done")
+
+
 # Override outdated files that have been modified
 file(GLOB GEN_OP_FILES RELATIVE "${GEN_OP_STAGING_DIR}/" "${GEN_OP_STAGING_DIR}/*")
 foreach(FILE ${GEN_OP_FILES})

@@ -30,7 +30,7 @@ void DynamicConcatenateOpImpl::DoCompute(Operator& op,
     for (int i = 0; i < num; ++i) {
       HT_ASSERT(offset + inputs.at(i)->dynamic_shape(axis) <= max_offset)
         << "The concat axis is out of range, please provide more paddings when building the graph.";
-      HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
+      HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                   hetu::impl::DynamicConcatenate, inputs.at(i),
                                   outputs.at(0), axis, offset, op->instantiation_ctx().stream());
       offset += inputs.at(i)->dynamic_shape(axis);

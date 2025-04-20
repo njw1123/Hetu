@@ -14,6 +14,8 @@
 #include "hetu/impl/communication/comm_group.h"
 #include "hetu/impl/communication/nccl_comm_group.h"
 #include "hetu/impl/memory/CUDACachingMemoryPool.cuh"
+#include "hetu/impl/memory/TorchMemoryPool.h"
+#include "hetu/impl/memory/CUDAMemoryPool.cuh"
 #include "hetu/core/device.h"
 #include "hetu/core/dtype.h"
 #include "hetu/core/ndarray_meta.h"
@@ -216,6 +218,7 @@ void ParamBuffer::Alloc(const Stream& stream,
         HT_RUNTIME_ERROR << "cudaMalloc failed: " << cudaGetErrorString(status);
       }
     }
+    std::cout << "start to borrow to memory pool" << std::endl;
     _storage = std::make_shared<NDArrayStorage>(BorrowToMemoryPool(
       local_device, _raw_ptr, _buffer_size, [=](DataPtr data_ptr) {
         TIK(free_time);
@@ -240,6 +243,7 @@ void ParamBuffer::Alloc(const Stream& stream,
         _free_time = COST_MSEC(free_time);
       })
     );
+    std::cout << "borrow to memory pool end" << std::endl;
   }
   _stream = stream;
   _is_allocated = true;

@@ -8,7 +8,7 @@ namespace graph {
 void PadOpImpl::DoCompute(Operator& op, 
                           const NDArrayList& inputs, NDArrayList& outputs,
                           RuntimeContext& ctx) const {
-  // HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), hetu::impl::Pad,
+  // HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), hetu::impl::Pad,
   //                                 inputs.at(0), outputs.at(0), get_paddings(),
   //                                 op->instantiation_ctx().stream(), get_mode(), get_constant());
   NDArray::pad(inputs.at(0), get_paddings(), get_mode(), get_constant(),
@@ -54,7 +54,7 @@ void PadOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& outputs,
 
 void PadGradientOpImpl::DoCompute(Operator& op,const NDArrayList& inputs,
                                  NDArrayList& outputs, RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(
     op->instantiation_ctx().placement.type(), type(), hetu::impl::PadGradient, inputs.at(0),
     outputs.at(0), get_paddings(), op->instantiation_ctx().stream(), get_mode());
 }

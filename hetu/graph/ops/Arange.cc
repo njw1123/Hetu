@@ -8,7 +8,7 @@ namespace graph {
 void ArangeOpImpl::DoCompute(Operator& op, 
                             const NDArrayList& inputs, NDArrayList& outputs,
                             RuntimeContext& ctx) const {
-  HT_DISPATCH_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), hetu::impl::Arange,
+  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(op->instantiation_ctx().placement.type(), type(), hetu::impl::Arange,
                                   start(), step(), outputs.at(0), op->instantiation_ctx().stream());
 }
 
