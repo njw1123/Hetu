@@ -8,6 +8,7 @@
 #include "hetu/impl/communication/comm_group.h"
 #include "hetu/impl/communication/mpi_comm_group.h"
 #include "hetu/impl/communication/nccl_comm_group.h"
+#include "hetu/impl/communication/torch_nccl_comm_group.h"
 #include "hetu/graph/recompute/recompute.h"
 #include "hetu/graph/offload/activation_cpu_offload.h"
 #include "hetu/impl/memory/CUDACachingMemoryPool.cuh"

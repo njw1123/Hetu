@@ -11,6 +11,8 @@
 #include "hetu/graph/init/initializer.h"
 #include "hetu/impl/communication/comm_group.h"
 #include "hetu/impl/communication/nccl_comm_group.h"
+#include "hetu/impl/communication/torch_nccl_comm_group.h"
+#include "hetu/impl/communication/torch_nccl_comm_group.h"
 #include <nccl.h>
 
 namespace hetu {

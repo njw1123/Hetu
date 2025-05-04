@@ -1,6 +1,7 @@
 #include "hetu/core/ndarray.h"
 #include "hetu/core/stream.h"
 #include "hetu/impl/communication/nccl_comm_group.h"
+#include "hetu/impl/communication/torch_nccl_comm_group.h"
 #include "hetu/impl/utils/common_utils.h"
 #include "hetu/impl/stream/CUDAStream.h"
 

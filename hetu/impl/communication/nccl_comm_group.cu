@@ -234,7 +234,7 @@ void NCCLCommunicationGroupDef::AllReduce(const NDArray& input, NDArray& output,
       NCCL_CALL(ncclAllReduce(send_buf, recv_buf, numel, nccl_dtype,
                               nccl_red_op, _comm, cuda_stream));
     }
-    NDArray::MarkUsedBy(input, _stream);
+    NDArray::MarkUsedBy({input, output}, _stream);
   }
 }
 

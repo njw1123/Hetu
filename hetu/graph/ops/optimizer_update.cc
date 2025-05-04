@@ -2,6 +2,7 @@
 #include "hetu/graph/ops/optimizer_update.h"
 #include "hetu/graph/ops/Communication.h"
 #include "hetu/impl/communication/nccl_comm_group.h"
+#include "hetu/impl/communication/torch_nccl_comm_group.h"
 #include "hetu/impl/communication/comm_group.h"
 #include "hetu/graph/ops/kernel_links.h"
 

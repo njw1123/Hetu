@@ -23,7 +23,7 @@ void FusedLayerNormTorch(const NDArray& in_arr, const NDArray& ln_scale,
   hetu::cuda::CUDADeviceGuard guard(device_idx);
   c10::Device torch_device(c10::DeviceType::CUDA, device_idx);
   c10::cuda::CUDAGuard device_guard(torch_device);
-  c10::cuda::CUDAStream torch_stream = GetTorchStream(stream);
+  c10::cuda::CUDAStream torch_stream = GetTorchCudaStream(stream);
   c10::cuda::CUDAStreamGuard stream_guard(torch_stream);
 
   auto input = TransNDArray2Tensor(in_arr).to(torch_device);
@@ -72,7 +72,7 @@ void FusedRMSNormTorch(const NDArray& in_arr, const NDArray& ln_scale,
   // hetu::cuda::CUDADeviceGuard guard(device_idx);
   // c10::Device torch_device(c10::DeviceType::CUDA, device_idx);
   // c10::cuda::CUDAGuard device_guard(torch_device);
-  // c10::cuda::CUDAStream torch_stream = GetTorchStream(stream);
+  // c10::cuda::CUDAStream torch_stream = GetTorchCudaStream(stream);
   // c10::cuda::CUDAStreamGuard stream_guard(torch_stream);
 
   // auto input = TransNDArray2Tensor(in_arr).to(torch_device);
@@ -117,7 +117,7 @@ void FusedLayerNormGradientTorch(const NDArray& out_grads, const NDArray& in_arr
   int device_idx = out_grads->device().index();
   at::cuda::set_device(device_idx);
   c10::cuda::CUDAGuard device_guard(device_idx);
-  c10::cuda::CUDAStream torch_stream = GetTorchStream(stream);
+  c10::cuda::CUDAStream torch_stream = GetTorchCudaStream(stream);
   // 设置CUDA设备守卫，确保操作在正确的设备上执行
   c10::cuda::CUDAStreamGuard stream_guard(torch_stream);
 

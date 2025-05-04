@@ -23,16 +23,11 @@ bool use_torch_memory_pool = []() -> bool {
 
 bool AllocAfterFreeFromCUDACache(const Device& device, void*& ptr, size_t size) {
   if (use_torch_memory_pool) {
-    std::cout << "torch alloc after free from cuda cache" << std::endl;
     auto caching_mempool = std::dynamic_pointer_cast<TorchMemoryPool>(GetMemoryPool(device));
-    std::cout << "start alloc ptr" << std::endl;
     bool ret = caching_mempool->AllocPtr(ptr, size);
-    std::cout << "alloc ptr ret: " << ret << std::endl;
     return ret;
   } else {
-    std::cout << "hetu alloc after free from cuda cache" << std::endl;
     auto caching_mempool = std::dynamic_pointer_cast<CUDACachingMemoryPool>(GetMemoryPool(device));
-    std::cout << "start alloc ptr" << std::endl;
     return caching_mempool->AllocPtr(ptr, size) || caching_mempool->WaitUntilAlloc(ptr, size);
   }
 }

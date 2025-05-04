@@ -3,6 +3,7 @@
 #include "hetu/graph/ops/kernel_links.h"
 #include "hetu/graph/executable_graph.h"
 #include "hetu/impl/communication/nccl_comm_group.h"
+#include "hetu/impl/communication/torch_nccl_comm_group.h"
 #include "hetu/impl/communication/comm_group.h"
 #include "hetu/core/symbol.h"
 #include <numeric>

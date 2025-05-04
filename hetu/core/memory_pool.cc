@@ -70,7 +70,6 @@ DataPtr AllocFromMemoryPool(const Device& device, size_t num_bytes,
 
 DataPtr BorrowToMemoryPool(const Device& device, void* ptr, size_t num_bytes, 
                            DataPtrDeleter deleter) {
-  std::cout << "in borrow to memory pool" << std::endl;
   return GetMemoryPool(device)->BorrowDataSpace(ptr, num_bytes,
                                                 std::move(deleter));
 }

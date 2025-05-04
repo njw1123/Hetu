@@ -20,7 +20,7 @@ void MatDotTorch(const NDArray& inputA, const NDArray& inputB, NDArray& output,
   hetu::cuda::CUDADeviceGuard guard(device_idx);
   c10::Device torch_device(c10::DeviceType::CUDA, device_idx);
   c10::cuda::CUDAGuard device_guard(torch_device);
-  c10::cuda::CUDAStream torch_stream = GetTorchStream(stream);
+  c10::cuda::CUDAStream torch_stream = GetTorchCudaStream(stream);
   c10::cuda::CUDAStreamGuard stream_guard(torch_stream);
 
   auto inputA_tensor = TransNDArray2Tensor(inputA).to(torch_device);

@@ -826,6 +826,10 @@ class NDArrayDef : public shared_ptr_target {
     return _meta.dynamic_shape[axis];
   }
 
+  void set_storage(std::shared_ptr<NDArrayStorage> storage) {
+    _storage = storage;
+  }
+
   const std::shared_ptr<NDArrayStorage>& storage() const {
     return _storage;
   }

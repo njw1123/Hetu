@@ -124,7 +124,6 @@ void NDArray::MarkUsedBy(const NDArrayList& arrays, const Stream& stream) {
       break;
     }
   }
-
   if (device.is_undetermined()) {
     // All arrays are undefined
     return;
@@ -184,7 +183,7 @@ NDArray NDArray::to(const NDArray& input, const Device& device, DataType dtype,
     }
     Stream stream(input->is_cuda() ? input->device() : target_device,
                   stream_id);
-    HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(stream.device_type(), __FUNCTION__,
+    HT_DISPATCH_HETU_TORCH_KERNEL_CPU_AND_CUDA(stream.device_type(), __FUNCTION__,
                                     hetu::impl::DataTransfer, input, out,
                                     stream);
     return out;
@@ -1820,7 +1819,7 @@ NDArray NDArray::copy(const NDArray& input, StreamIndex stream_id,
   if (out->device().is_cuda())
     out_device = out->device();
   Stream stream(out_device, stream_id);
-  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(out_device.type(), __FUNCTION__,
+  HT_DISPATCH_HETU_TORCH_KERNEL_CPU_AND_CUDA(out_device.type(), __FUNCTION__,
                                   hetu::impl::DataTransfer, input, out, stream);
   return out;
 }
@@ -1906,7 +1905,7 @@ NDArray NDArray::contiguous(const NDArray& input, StreamIndex stream_id,
   }
   NDArray out = output.is_defined() ? output : NDArray::empty_like(input);
   Stream stream(input->device(), stream_id);
-  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(input->device().type(), __FUNCTION__,
+  HT_DISPATCH_HETU_TORCH_KERNEL_CPU_AND_CUDA(input->device().type(), __FUNCTION__,
                                   hetu::impl::DataTransfer, input, out, stream);
   return out;
 }
@@ -1932,7 +1931,7 @@ NDArray NDArray::randn(const HTShape& shape, const Device& device,
 NDArray NDArray::uniform_(NDArray& data, double lb, double ub, uint64_t seed,
                           StreamIndex stream_id) {
   Stream stream(data->device(), stream_id);
-  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(data->device().type(), __FUNCTION__,
+  HT_DISPATCH_HETU_TORCH_KERNEL_CPU_AND_CUDA(data->device().type(), __FUNCTION__,
                                   hetu::impl::UniformInits, data, lb, ub, seed,
                                   stream);
   return data;
@@ -1941,7 +1940,7 @@ NDArray NDArray::uniform_(NDArray& data, double lb, double ub, uint64_t seed,
 NDArray NDArray::normal_(NDArray& data, double mean, double stddev,
                          uint64_t seed, StreamIndex stream_id) {
   Stream stream(data->device(), stream_id);
-  HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(data->device().type(), __FUNCTION__,
+  HT_DISPATCH_HETU_TORCH_KERNEL_CPU_AND_CUDA(data->device().type(), __FUNCTION__,
                                   hetu::impl::NormalInits, data, mean, stddev,
                                   seed, stream);
   return data;

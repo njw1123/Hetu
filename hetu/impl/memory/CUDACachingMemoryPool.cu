@@ -2,6 +2,7 @@
 #include "hetu/impl/memory/memory_manager.h"
 #include "hetu/impl/stream/CUDAStream.h"
 #include "hetu/impl/communication/nccl_comm_group.h"
+#include "hetu/impl/communication/torch_nccl_comm_group.h"
 #include "hetu/impl/utils/cuda_utils.h"
 #include "hetu/common/timing.h"
 #include <mutex>

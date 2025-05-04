@@ -130,7 +130,7 @@ DECLARE_HETU_KERNEL_CPU_AND_CUDA(Conv2dBroadcast, const NDArray&, NDArray&,
                             const Stream&);
 DECLARE_HETU_KERNEL_CPU_AND_CUDA(Conv2dReduceSum, const NDArray&, NDArray&,
                             const Stream&);
-DECLARE_HETU_KERNEL_CPU_AND_CUDA(DataTransfer, const NDArray& from, NDArray& to,
+DECLARE_HETU_TORCH_KERNEL_CPU_AND_CUDA(DataTransfer, const NDArray& from, NDArray& to,
                             const Stream&);
 DECLARE_HETU_KERNEL_CPU_AND_CUDA(DeQuantization, const NDArray&, NDArray&, const NDArray&, NDArray&, 
                             int64_t, const Stream&);
@@ -181,19 +181,19 @@ DECLARE_HETU_KERNEL_CPU_AND_CUDA(EmbeddingLookupGradient, const NDArray&,
                             const NDArray&, NDArray&, const Stream&);
 DECLARE_HETU_KERNEL_CPU_AND_CUDA(Exp, const NDArray&, NDArray&, const Stream&);
 DECLARE_HETU_KERNEL_CPU_AND_CUDA(Eye, NDArray&, const Stream&);
-DECLARE_HETU_KERNEL_CUDA(FlashAttn, const NDArray&, const NDArray&, const NDArray&,        
+DECLARE_HETU_TORCH_KERNEL_CUDA(FlashAttn, const NDArray&, const NDArray&, const NDArray&,        
                     NDArray&, NDArray&, NDArray&, NDArray&, NDArray&, NDArray&,     
                     NDArray&, NDArray&, const float, const float,
                     const bool, const bool, const Stream&);
-DECLARE_HETU_KERNEL_CUDA(FlashAttnGradient, const NDArray&, const NDArray&, const NDArray&,        
+DECLARE_HETU_TORCH_KERNEL_CUDA(FlashAttnGradient, const NDArray&, const NDArray&, const NDArray&,        
                     const NDArray&, NDArray&, NDArray&, NDArray&, NDArray&, NDArray&,     
                     NDArray&, const float, const float, const bool, const Stream&);
-DECLARE_HETU_KERNEL_CUDA(FlashAttnVarlen, const NDArray&, const NDArray&,const NDArray&,
+DECLARE_HETU_TORCH_KERNEL_CUDA(FlashAttnVarlen, const NDArray&, const NDArray&,const NDArray&,
                     const NDArray&, const NDArray&, NDArray&, NDArray&, NDArray&, 
                     NDArray&, NDArray&, NDArray&, NDArray&, NDArray& rng_state,
                     const int, const int, const float, const float, const bool, 
                     const bool, const bool, const Stream&);
-DECLARE_HETU_KERNEL_CUDA(FlashAttnVarlenGradient, const NDArray&, const NDArray&, const NDArray&,        
+DECLARE_HETU_TORCH_KERNEL_CUDA(FlashAttnVarlenGradient, const NDArray&, const NDArray&, const NDArray&,        
                     const NDArray&, const NDArray&, const NDArray&, 
                     NDArray&, NDArray&, NDArray&, NDArray&, NDArray&,     
                     NDArray&, const int, const int, const float, const float, 
@@ -302,7 +302,7 @@ DECLARE_HETU_KERNEL_CPU_AND_CUDA(Quantization, const NDArray&, NDArray&, const N
                             int64_t, bool, const Stream&);
 DECLARE_HETU_KERNEL_CPU_AND_CUDA(RangeMask, const NDArray&, int64_t, int64_t,
                             NDArray&, const Stream&);                            
-DECLARE_HETU_KERNEL_CPU_AND_CUDA(Reduce, const NDArray&, NDArray&, const HTAxes&,
+DECLARE_HETU_TORCH_KERNEL_CPU_AND_CUDA(Reduce, const NDArray&, NDArray&, const HTAxes&,
                             ReductionType, const Stream&);
 DECLARE_HETU_KERNEL_CPU_AND_CUDA(ReduceMax, const NDArray&, NDArray&, const int64_t*,
                             int64_t, const Stream&);
@@ -379,9 +379,9 @@ DECLARE_HETU_KERNEL_CUDA(VocabParallelCrossEntropyGradient, const NDArray&, cons
                     NDArray&, const Stream&);                    
 DECLARE_HETU_KERNEL_CPU_AND_CUDA(Where, const NDArray&, const NDArray&,
                             const NDArray&, NDArray&, const Stream&);
-DECLARE_HETU_KERNEL_CPU_AND_CUDA(NormalInits, NDArray&, double, double, uint64_t,
+DECLARE_HETU_TORCH_KERNEL_CPU_AND_CUDA(NormalInits, NDArray&, double, double, uint64_t,
                             const Stream&);
-DECLARE_HETU_KERNEL_CPU_AND_CUDA(UniformInits, NDArray&, double, double, uint64_t,
+DECLARE_HETU_TORCH_KERNEL_CPU_AND_CUDA(UniformInits, NDArray&, double, double, uint64_t,
                             const Stream&);
 DECLARE_HETU_KERNEL_CPU_AND_CUDA(TruncatedNormalInits, NDArray&, double, double,
                             double, double, uint64_t, const Stream&);
@@ -472,6 +472,7 @@ DECLARE_HETU_KERNEL_CUDA(SoftshrinkGradient, const NDArray&, const NDArray&,
   } while (0)
 
 #define HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(DEVICE_TYPE, OP_TYPE, KERNEL, ...)     \
+  std::cout << "use hetu kernel " << #KERNEL << std::endl;                          \
   HT_DISPATCH_HETU_KERNEL_SWITCH(                                                   \
     DEVICE_TYPE, OP_TYPE,                                                           \
     HT_DISPATCH_HETU_KERNEL_CASE_CPU(KERNEL, __VA_ARGS__)                           \
@@ -482,6 +483,7 @@ DECLARE_HETU_KERNEL_CUDA(SoftshrinkGradient, const NDArray&, const NDArray&,
                             HT_DISPATCH_HETU_KERNEL_CASE_CPU(KERNEL, __VA_ARGS__))
 
 #define HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(DEVICE_TYPE, OP_TYPE, KERNEL, ...)        \
+  std::cout << "use hetu kernel " << #KERNEL << std::endl;                          \       
   HT_DISPATCH_HETU_KERNEL_SWITCH(DEVICE_TYPE, OP_TYPE,                              \
                             HT_DISPATCH_HETU_KERNEL_CASE_CUDA(KERNEL, __VA_ARGS__))
 
@@ -532,6 +534,7 @@ DECLARE_HETU_KERNEL_CUDA(SoftshrinkGradient, const NDArray&, const NDArray&,
   do {                                                                                  \
     const auto& _device_type = DEVICE_TYPE;                                             \
     if (hetu::impl::use_torch_kernel && _device_type == kCUDA) {                        \
+      std::cout << "use torch kernel " << #KERNEL << std::endl;                         \
       HT_DISPATCH_TORCH_KERNEL_CPU_AND_CUDA(DEVICE_TYPE, OP_TYPE, KERNEL, __VA_ARGS__); \
     } else {                                                                            \
       HT_DISPATCH_HETU_KERNEL_CPU_AND_CUDA(DEVICE_TYPE, OP_TYPE, KERNEL, __VA_ARGS__);  \
@@ -542,6 +545,7 @@ DECLARE_HETU_KERNEL_CUDA(SoftshrinkGradient, const NDArray&, const NDArray&,
 #define HT_DISPATCH_HETU_TORCH_KERNEL_CUDA_ONLY(DEVICE_TYPE, OP_TYPE, KERNEL, ...)      \
   do {                                                                                  \
     if (hetu::impl::use_torch_kernel) {                                                 \
+      std::cout << "use torch kernel " << #KERNEL << std::endl;                         \
       HT_DISPATCH_TORCH_KERNEL_CUDA_ONLY(DEVICE_TYPE, OP_TYPE, KERNEL, __VA_ARGS__);    \
     } else {                                                                            \
       HT_DISPATCH_HETU_KERNEL_CUDA_ONLY(DEVICE_TYPE, OP_TYPE, KERNEL, __VA_ARGS__);     \

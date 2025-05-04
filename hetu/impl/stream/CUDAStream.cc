@@ -33,7 +33,8 @@ static void InitDevice(int32_t device_id) {
   hetu::cuda::CUDADeviceGuard guard(device_id);
   for (int32_t i = 0; i < HT_NUM_STREAMS_PER_DEVICE; i++) {
     if (i == 0) {
-      device_streams[device_id][i] = cudaStreamLegacy;
+      device_streams[device_id][i] = 0;
+      // device_streams[device_id][i] = cudaStreamLegacy;
     }
     else {
       CudaStreamCreateWithPriority(&device_streams[device_id][i], cudaStreamDefault, 0);
@@ -47,6 +48,10 @@ static void InitDevice(int32_t device_id) {
       }
       */
     }
+    // CudaStreamCreateWithPriority(
+    //   &device_streams[device_id][i],
+    //   i == 0 ? cudaStreamDefault : cudaStreamNonBlocking, 0);
+     std::cout << "device_id: " << device_id << " i: " << i << " cudaStreamDefault: " << device_streams[device_id][i] << std::endl;
   }
   device_initialized[device_id] = 1;
 }
@@ -94,9 +99,10 @@ void SynchronizeAllCUDAStreams(const Device& device) {
     auto device_id = device.index();
     if (!device_initialized[device_id])
       return;
-    for (size_t j = 0; j < device_streams[device_id].size(); j++)
+    for (size_t j = 0; j < device_streams[device_id].size(); j++){
       if (device_streams[device_id][j])
         CUDAStream(Stream(Device(kCUDA, device_id), j)).Sync();
+    }
   }
 }
 

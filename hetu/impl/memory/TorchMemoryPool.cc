@@ -21,7 +21,6 @@ namespace impl {
 TorchMemoryPool::TorchMemoryPool(int device_id)
     : CUDAMemoryPool(device_id, "TorchGPUMemPool" + std::to_string(device_id)),
       _device_id(device_id) {
-  std::cout << "Create TorchMemoryPool " << _device_id << std::endl;
   _data_ptr_info.reserve(8192); // Pre-allocate some space
   HT_LOG_DEBUG << "TorchMemoryPool created for device " << _device_id;
 }
@@ -36,17 +35,11 @@ bool TorchMemoryPool::AllocPtr(void*& ptr, size_t size) {
     std::cerr << "Error: TorchMemoryPool::AllocPtr called on a null object!" << std::endl;
     return false;
   }
-  std::cout << "TorchMemoryPool::AllocPtr" << std::endl;
-  std::cout << "_device_id: " << _device_id << std::endl;
   c10::cuda::CUDAGuard device_guard(_device_id);
-  std::cout << "TorchMemoryPool::AllocPtr 1" << std::endl;
   try {
     HT_LOG_DEBUG << "Attempting raw_alloc on device " << _device_id << " with size " << size;
     ptr = c10::cuda::CUDACachingAllocator::raw_alloc(size);
     HT_LOG_DEBUG << "raw_alloc succeeded on device " << _device_id << ". Pointer: " << ptr;
-    std::cout << "TorchMemoryPool::AllocPtr success" << std::endl;
-    // c10::DataPtr data_ptr = c10::cuda::CUDACachingAllocator::allocate(size, _device_id);
-    // ptr = data_ptr.get();
     return true;
   } catch (const c10::Error& e) {
     // 内存分配失败，清除错误并返回false
@@ -91,8 +84,7 @@ DataPtr TorchMemoryPool::AllocDataSpace(size_t num_bytes, const Stream& stream) 
   void* ptr = nullptr;
   try {
     ptr = c10::cuda::CUDACachingAllocator::raw_alloc(num_bytes);
-    // c10::DataPtr data_ptr = c10::cuda::CUDACachingAllocator::allocate(num_bytes, _device_id);
-    // ptr = data_ptr.get();
+    // ptr = c10::cuda::CUDACachingAllocator::raw_alloc_with_stream(num_bytes, CUDAStream(stream));
   } catch (const c10::Error& e) {
     HT_RUNTIME_ERROR << "Torch CUDACachingAllocator failed to allocate "
                  << num_bytes << " bytes on device " << _device_id << ". Error: "
@@ -102,6 +94,9 @@ DataPtr TorchMemoryPool::AllocDataSpace(size_t num_bytes, const Stream& stream) 
     HT_RUNTIME_ERROR << "Torch CUDACachingAllocator failed with unknown exception.";
     throw;
   }
+
+  HT_ASSERT(ptr != nullptr) << "Torch CUDACachingAllocator failed to allocate "
+                 << num_bytes << " bytes on device " << _device_id;
 
   DataPtr data_ptr{ptr, num_bytes, device(), next_id()};
   data_ptr.is_new_malloc = true; 
@@ -113,6 +108,7 @@ DataPtr TorchMemoryPool::AllocDataSpace(size_t num_bytes, const Stream& stream) 
     data_ptr.id
   );  
   MarkDataSpaceUsedByStream(data_ptr, stream);
+  // PrintSummary();
 
   return data_ptr;
 }
@@ -120,7 +116,7 @@ DataPtr TorchMemoryPool::AllocDataSpace(size_t num_bytes, const Stream& stream) 
 DataPtr TorchMemoryPool::BorrowDataSpace(void* ptr, size_t num_bytes,
                                          DataPtrDeleter deleter,
                                          const Stream& stream) {
-  HT_LOG_TRACE << "BorrowDataSpace: " << ptr << ", " << num_bytes << ", " << stream;
+  
   HT_VALUE_ERROR_IF(ptr == nullptr)
       << "Borrowing an empty storage is not allowed";
   HT_VALUE_ERROR_IF(!deleter)
@@ -130,6 +126,7 @@ DataPtr TorchMemoryPool::BorrowDataSpace(void* ptr, size_t num_bytes,
   if (num_bytes == 0)
     return DataPtr{nullptr, 0, device(), static_cast<DataPtrId>(-1)};
   Stream borrow_stream = stream.is_defined() ? stream : Stream(device(), kBlockingStream);
+  HT_LOG_TRACE << "BorrowDataSpace: " << ptr << ", " << num_bytes << ", " << borrow_stream;
   DataPtr data_ptr{ptr, num_bytes, device(), next_id()};
   data_ptr.is_new_malloc = false; 
 
@@ -178,14 +175,16 @@ void TorchMemoryPool::EmptyCache() {
 
 void TorchMemoryPool::MarkDataSpaceUsedByStream(DataPtr data_ptr,
                                                 const Stream& stream) {
-  if (data_ptr.ptr == nullptr || data_ptr.size == 0 || stream.is_blocking())
+  // if (data_ptr.ptr == nullptr || data_ptr.size == 0 || stream.is_blocking())
+  //   return;
+  if (data_ptr.ptr == nullptr || data_ptr.size == 0)
     return;
   HT_LOG_TRACE << "MarkDataSpaceUsedByStream: " << data_ptr << ", " << stream;
   try {
+    
     int device_idx = stream.device().index();
     c10::Device torch_device(c10::DeviceType::CUDA, device_idx);
-    c10::cuda::CUDAStream torch_stream = GetTorchStream(stream);
-
+    c10::cuda::CUDAStream torch_stream = GetTorchCudaStream(stream);
   // 标记该内存块被这个stream使用
     c10::DataPtr torch_data_ptr(data_ptr.ptr, c10::Device(c10::DeviceType::CUDA, device_idx));
     _data_ptr_info[data_ptr.id]->insert_used_stream(stream.pack());
@@ -199,8 +198,11 @@ void TorchMemoryPool::MarkDataSpaceUsedByStream(DataPtr data_ptr,
 
 void TorchMemoryPool::MarkDataSpacesUsedByStream(DataPtrList& data_ptrs,
                                                  const Stream& stream) {
-  if (stream.is_blocking() || data_ptrs.empty())
-    return;
+  // if (stream.is_blocking() || data_ptrs.empty())
+  //   return;
+
+  if (data_ptrs.empty())
+  return;
 
   for (const auto& data_ptr : data_ptrs) {
     MarkDataSpaceUsedByStream(data_ptr, stream);

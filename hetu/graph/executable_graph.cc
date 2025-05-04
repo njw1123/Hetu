@@ -6,6 +6,7 @@
 #include "hetu/graph/offload/activation_cpu_offload.h"
 #include "hetu/impl/communication/comm_group.h"
 #include "hetu/impl/communication/nccl_comm_group.h"
+#include "hetu/impl/communication/torch_nccl_comm_group.h"
 #include "hetu/impl/profiler/profiler.h"
 #include "hetu/impl/utils/cuda_utils.h"
 #include "hetu/core/symbol.h"
@@ -1008,7 +1009,19 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
     // **** 调用op计算 ****
     NDArrayList output_vals;
     try {
+      // std::cout << "compute op " << op << std::endl;
+      // // std::cout << "input " << input_vals << std::endl;
+      // for (auto& input : input_vals) {
+      //   auto  s = NDArray::sum(input);
+      //   std::cout << "input " << s << std::endl;
+      // }
       output_vals = op->Compute(input_vals, runtime_ctx, micro_batch_id);
+      // op->Sync(micro_batch_id);
+      // // std::cout << "output " << output_vals << std::endl;
+      // for (auto& output : output_vals) {
+      //   auto  s = NDArray::sum(output);
+      //   std::cout << "output " << s << std::endl;
+      // }
     } catch (const std::exception& e) {
       HT_RUNTIME_ERROR << "During computing exec op " << op << " of micro batch " << micro_batch_id
         << " with inputs " << op->inputs() << ", an error occurs: " << e.what();
@@ -1331,8 +1344,15 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
     SynchronizeAllStreams();
     // memory debug use
     // hetu::impl::comm::EmptyNCCLCache();
-    if (_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO)
-      GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run ALLOC end");
+    if (_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO){
+      if(hetu::impl::use_torch_memory_pool){
+        std::dynamic_pointer_cast<hetu::impl::TorchMemoryPool>(GetMemoryPool(local_device))->PrintSummary();
+      }
+      else{
+        GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run ALLOC end");
+      }
+    }
+      
     return {};
   }
   // ********************** Run Level Check Point **********************
@@ -1472,8 +1492,14 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
   // 仅仅是进行了local的计算而不涉及任何grad的reduce
   if (_run_level == RunLevel::COMPUTE_ONLY) {
     SynchronizeAllStreams();
-    if (_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO)
-      GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run COMPUTE_ONLY end");
+    if(_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO){
+      if(hetu::impl::use_torch_memory_pool){
+        std::dynamic_pointer_cast<hetu::impl::TorchMemoryPool>(GetMemoryPool(local_device))->PrintSummary();
+      }
+      else{
+        GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run COMPUTE_ONLY end");
+      }
+    }
     return {};
   }
   // ********************** Run Level Check Point **********************
@@ -1542,8 +1568,15 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
       // 已经在ComputeFunc中将grad加到了accumulate_grad_buffer中
     }
     _p2p_events.clear();
-    if (_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO)
-      GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run GRAD end");
+    if(_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO){
+      if(hetu::impl::use_torch_memory_pool){
+        std::dynamic_pointer_cast<hetu::impl::TorchMemoryPool>(GetMemoryPool(local_device))->PrintSummary();
+      }
+      else{
+        GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run GRAD end");
+      }
+    }
+
     return {};
   }
   // 说明是RunLevel::UPDATE了
@@ -1613,7 +1646,9 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
       }
     });
   }
+  // std::cout << "start sync" << std::endl;
   // SynchronizeAllStreams(local_device);
+  // std::cout << "sync done" << std::endl;
   // OpList sync_ops;
   for (auto op_id : to_sync_op_ids) {
     _op_indexing[op_id]->Sync(num_micro_batches - 1);
@@ -1651,8 +1686,14 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
       }
       // _current_grad_buffer->Free();
     }
-    if (_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO)
-      GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run UPDATE end");
+    if(_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO){
+      if(hetu::impl::use_torch_memory_pool){
+        std::dynamic_pointer_cast<hetu::impl::TorchMemoryPool>(GetMemoryPool(local_device))->PrintSummary();
+      }
+      else{
+        GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run UPDATE end");
+      }
+    }
     return results;
   }
   // ********************** Run Level Check Point **********************
@@ -1668,8 +1709,16 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
   _grad_scale = grad_scale;
   auto& local_device = hetu::impl::comm::GetLocalDevice();
   HT_LOG_DEBUG << local_device << ": exec graph run begin .............";
-  if (_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO)
-    GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run begin");
+  if (_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO){
+    if(hetu::impl::use_torch_memory_pool){
+      std::dynamic_pointer_cast<hetu::impl::TorchMemoryPool>(GetMemoryPool(local_device))->PrintSummary();
+    }
+    else{
+      GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run begin");
+    }
+  }
+
+
 
   // TODO: For each pair of `fetches` and `feed_dict`,
   // deduce the optimal execution plan, and cache it.
@@ -2186,6 +2235,16 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
   HT_LOG_DEBUG << local_device << ": crucial run time = " << COST_MSEC(crucial_run) << " ms";
   if (_run_level == RunLevel::TOPO) {
     return results;
+  }
+
+  if (_memory_profile_level == MEMORY_PROFILE_LEVEL::INFO){
+    if(hetu::impl::use_torch_memory_pool){
+      std::cout << "use torch memory pool" << std::endl;
+      std::dynamic_pointer_cast<hetu::impl::TorchMemoryPool>(GetMemoryPool(local_device))->PrintSummary();
+    }
+    else{
+      GetCUDAProfiler(local_device)->PrintCurrMemoryInfo(name() + " run end");
+    }
   }
   
   // get all micro batches memory consumption

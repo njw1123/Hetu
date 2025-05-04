@@ -6,6 +6,8 @@
 #include "hetu/graph/ops/Communication.h"
 #include "hetu/graph/ops/ParallelAttention.h"
 #include "hetu/graph/ops/group.h"
+#include "hetu/impl/memory/CUDAMemoryPool.cuh"
+#include "hetu/impl/memory/TorchMemoryPool.h"
 
 namespace hetu {
 namespace graph {

@@ -13,6 +13,7 @@
 #include "hetu/graph/ops/Communication.h"
 #include "hetu/impl/communication/comm_group.h"
 #include "hetu/impl/communication/nccl_comm_group.h"
+#include "hetu/impl/communication/torch_nccl_comm_group.h"
 #include "hetu/impl/memory/CUDACachingMemoryPool.cuh"
 #include "hetu/impl/memory/TorchMemoryPool.h"
 #include "hetu/impl/memory/CUDAMemoryPool.cuh"
@@ -171,36 +172,37 @@ void ParamBuffer::Alloc(const Stream& stream,
   HT_LOG_DEBUG << local_device << ": " << _name << " param buffer"
     << " will alloc " << (double)_buffer_size / (1024 * 1024) << " MiB";  
   if (use_nccl) {
-    HT_ASSERT(comm != nullptr)
-      << "nccl buffer registration must have a communicator";
-    void* reg_handle;                                     
-    ncclResult_t status = ncclMemAlloc(&_raw_ptr, _buffer_size);
-    if (status != ncclSuccess) {
-      HT_RUNTIME_ERROR << "ncclMemAlloc failed: " << ncclGetErrorString(status);
-    }
-    status = ncclCommRegister(comm, _raw_ptr, _buffer_size, &reg_handle);
-    if (status != ncclSuccess) {
-      HT_RUNTIME_ERROR << "ncclCommRegister failed: " << ncclGetErrorString(status);
-    }         
-    _storage = std::make_shared<NDArrayStorage>(BorrowToMemoryPool(
-      local_device, _raw_ptr, _buffer_size, [=](DataPtr data_ptr) {
-        TIK(free_time);
-        hetu::cuda::CUDADeviceGuard guard(data_ptr.device.index());
-        HT_LOG_DEBUG << local_device << ": " << _name << " param buffer"
-          << " will free " << (double)_buffer_size / (1024 * 1024) << " MiB";  
-        ncclResult_t status = ncclCommDeregister(comm, reg_handle);
-        if (status != ncclSuccess) {
-          HT_RUNTIME_ERROR << "ncclCommDeregister failed: " << ncclGetErrorString(status);
-        }   
-        status = ncclMemFree(data_ptr.ptr);
-        if (status != ncclSuccess) {
-          HT_RUNTIME_ERROR << "ncclMemFree failed: " << ncclGetErrorString(status);
-        } 
-        HT_LOG_DEBUG << local_device << ": " << _name << " param buffer free end";  
-        TOK(free_time);
-        _free_time = COST_MSEC(free_time);
-      })
-    );
+    HT_RUNTIME_ERROR << "nccl buffer malloc is not supported yet";
+    // HT_ASSERT(comm != nullptr)
+    //   << "nccl buffer registration must have a communicator";
+    // void* reg_handle;                                     
+    // ncclResult_t status = ncclMemAlloc(&_raw_ptr, _buffer_size);
+    // if (status != ncclSuccess) {
+    //   HT_RUNTIME_ERROR << "ncclMemAlloc failed: " << ncclGetErrorString(status);
+    // }
+    // status = ncclCommRegister(comm, _raw_ptr, _buffer_size, &reg_handle);
+    // if (status != ncclSuccess) {
+    //   HT_RUNTIME_ERROR << "ncclCommRegister failed: " << ncclGetErrorString(status);
+    // }         
+    // _storage = std::make_shared<NDArrayStorage>(BorrowToMemoryPool(
+    //   local_device, _raw_ptr, _buffer_size, [=](DataPtr data_ptr) {
+    //     TIK(free_time);
+    //     hetu::cuda::CUDADeviceGuard guard(data_ptr.device.index());
+    //     HT_LOG_DEBUG << local_device << ": " << _name << " param buffer"
+    //       << " will free " << (double)_buffer_size / (1024 * 1024) << " MiB";  
+    //     ncclResult_t status = ncclCommDeregister(comm, reg_handle);
+    //     if (status != ncclSuccess) {
+    //       HT_RUNTIME_ERROR << "ncclCommDeregister failed: " << ncclGetErrorString(status);
+    //     }   
+    //     status = ncclMemFree(data_ptr.ptr);
+    //     if (status != ncclSuccess) {
+    //       HT_RUNTIME_ERROR << "ncclMemFree failed: " << ncclGetErrorString(status);
+    //     } 
+    //     HT_LOG_DEBUG << local_device << ": " << _name << " param buffer free end";  
+    //     TOK(free_time);
+    //     _free_time = COST_MSEC(free_time);
+    //   })
+    // );
   } else {
     if (use_caching_mempool) {
       if (!hetu::impl::AllocAfterFreeFromCUDACache(local_device, _raw_ptr, _buffer_size)) {
@@ -1395,7 +1397,8 @@ void SwitchExecGraph::BufferBatchedIsendIrecv(const Operator& op,
     HT_ASSERT(!recv_buffer->IsAllocated())
       << "recv buffer shouldn't be allocated yet";
     // use_nccl=true will slow down
-    recv_buffer->Alloc(op_stream, false, comm_nccl_group->GetComm());
+    // recv_buffer->Alloc(op_stream, false, comm_nccl_group->GetComm());
+    recv_buffer->Alloc(op_stream, false, nullptr);
   }
   op->instantiation_ctx().start[0]->Record(op_stream);
   BufferBatchedIsendIrecvExec(comm_nccl_group); // 执行BufferBatchedIsendIrecv
@@ -1684,7 +1687,8 @@ void SwitchExecGraph::SwitchParams(SWITCH_MODE switch_mode,
     }
     if (!send_buffer->IsAllocated()) {
       // use_nccl=true will slow down
-      send_buffer->Alloc(Stream(local_device, comm_stream_idx), false, comm_nccl_group->GetComm());
+      // send_buffer->Alloc(Stream(local_device, comm_stream_idx), false, comm_nccl_group->GetComm());
+      send_buffer->Alloc(Stream(local_device, comm_stream_idx), false, nullptr);
     }
   }
   if (_profile_level <= SWITCH_PROFILE_LEVEL::MEMORY) {

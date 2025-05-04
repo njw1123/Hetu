@@ -400,9 +400,11 @@ class AttnCommRing {
 
   void PrepareKVBlocks(const NDArray& local_k, const NDArray& local_v, bool reuse_local_kv_storage = false, bool piggyback_grad = false);
 
-  void PrepareStorageFwd(const NDArray& local_q, const NDArray& local_k, const NDArray& local_v, const NDArray& local_out);
+  // void PrepareStorageFwd(const NDArray& local_q, const NDArray& local_k, const NDArray& local_v, const NDArray& local_out);
+  void PrepareStorageFwd(const NDArray& local_q, const NDArray& local_k, const NDArray& local_v);
 
-  void PrepareStorageBwd(const std::shared_ptr<AttnCtx>& attn_ctx, const NDArray& grad_output, const NDArray& local_dq);
+  // void PrepareStorageBwd(const std::shared_ptr<AttnCtx>& attn_ctx, const NDArray& grad_output, const NDArray& local_dq);
+  void PrepareStorageBwd(const std::shared_ptr<AttnCtx>& attn_ctx, const NDArray& grad_output);
 
   void SaveCtx(const std::shared_ptr<AttnCtx>& attn_ctx);
 
@@ -554,6 +556,9 @@ class ParallelAttentionOpImpl final : public OpInterface {
   void DoCompute(Operator& op, const NDArrayList& inputs, NDArrayList& outputs,
                  RuntimeContext& ctx) const override;
 
+  NDArrayList DoCompute(Operator& op, const NDArrayList& inputs,
+                 RuntimeContext& ctx) const override;
+
   TensorList DoGradient(Operator& op, const TensorList& grad_outputs) const override;
 
   HTShapeList DoInferShape(Operator& op, const HTShapeList& input_shapes, RuntimeContext& ctx) const override;
@@ -661,6 +666,9 @@ class ParallelAttentionGradientOpImpl final : public OpInterface {
                       const InstantiationContext& inst_ctx) const override;
 
   void DoCompute(Operator& op, const NDArrayList& inputs, NDArrayList& outputs,
+                 RuntimeContext& ctx) const override;
+
+  NDArrayList DoCompute(Operator& op, const NDArrayList& inputs,
                  RuntimeContext& ctx) const override;
 
   HTShapeList DoInferShape(Operator& op, const HTShapeList& input_shapes, RuntimeContext& ctx) const override;

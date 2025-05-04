@@ -3,6 +3,10 @@
 #include "hetu/core/memory_pool.h"
 #include "hetu/core/device.h"
 #include <functional>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
+#include "torch/torch.h"
+#include <ATen/ATen.h>
 
 namespace hetu {
 
@@ -32,6 +36,23 @@ class NDArrayStorage {
     _ptr(ptr), 
     _in_mempool(in_mempool) {
   } 
+
+  NDArrayStorage(at::Storage torch_storage){
+    void* storage_data_ptr = torch_storage.data_ptr().get(); 
+    size_t storage_nbytes = torch_storage.nbytes();
+    hetu::Device hetu_device;
+    if (torch_storage.device().type() == c10::DeviceType::CPU) {
+      hetu_device = hetu::Device(hetu::DeviceType::CPU);
+    } else if (torch_storage.device().type() == c10::DeviceType::CUDA) {
+      hetu_device = hetu::Device(hetu::DeviceType::CUDA, torch_storage.device().index());
+    } else {
+      HT_RUNTIME_ERROR << "不支持的 Torch 设备类型: " << c10::toString(torch_storage.device().type());
+    }
+    _ptr = DataPtr(storage_data_ptr, storage_nbytes, hetu_device, 0);
+    _in_mempool = false;
+    _torch_storage = torch_storage;
+    is_torch_storage = true;
+  }
 
   ~NDArrayStorage();
 
@@ -77,6 +98,9 @@ class NDArrayStorage {
   DataPtr _ptr;
   bool _in_mempool;
   bool _writable{true};
+  bool is_torch_storage{false};
+  at::Storage _torch_storage;
+
 };
 
 } // namespace hetu

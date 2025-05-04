@@ -16,11 +16,11 @@ void ArraySetTorch(NDArray& data, double value, const Stream& stream) {
   hetu::cuda::CUDADeviceGuard guard(device_idx);
   c10::Device torch_device(c10::DeviceType::CUDA, device_idx);
   c10::cuda::CUDAGuard device_guard(torch_device);
-  c10::cuda::CUDAStream torch_stream = GetTorchStream(stream);
+  c10::cuda::CUDAStream torch_stream = GetTorchCudaStream(stream);
   c10::cuda::CUDAStreamGuard stream_guard(torch_stream);
 
   HT_LOG_TRACE << "execute torch array set";  
-  auto data_tensor = TransNDArray2Tensor(data).to(torch_device);
+  auto data_tensor = TransNDArray2Tensor(data);
   data_tensor.fill_(value);
   HT_LOG_TRACE << "execute torch array set end";
 

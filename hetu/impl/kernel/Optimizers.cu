@@ -158,10 +158,12 @@ void AdamCuda(const NDArray& grad, NDArray& param, NDArray& mean,
   if (size == 0)
     return;
   NDArray grad_;
-  if (grad->dtype() != param->dtype())
+  if (grad->dtype() != param->dtype()){
     grad_ = NDArray::to(grad, param->device(), param->dtype(), stream.stream_index());
-  else
+  }
+  else{
     grad_ = grad;
+  }
   HT_DISPATCH_FLOATING_TYPES(param->dtype(), spec_t, "AdamUpdateCuda", [&]() {
     int64_t cur_step = step->data_ptr<int64_t>()[0];
     using InType = std::tuple<spec_t, spec_t, spec_t, spec_t>;

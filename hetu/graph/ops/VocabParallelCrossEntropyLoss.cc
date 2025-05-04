@@ -1,5 +1,6 @@
 #include "hetu/graph/ops/VocabParallelCrossEntropyLoss.h"
 #include "hetu/impl/communication/nccl_comm_group.h"
+#include "hetu/impl/communication/torch_nccl_comm_group.h"
 #include "hetu/impl/communication/comm_group.h"
 #include "hetu/graph/distributed_states.h"
 #include "hetu/graph/headers.h"
