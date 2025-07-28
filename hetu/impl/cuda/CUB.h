@@ -1,8 +1,8 @@
+#pragma once
+
 #include <cub/cub.cuh>
 #include "hetu/impl/stream/CUDAStream.h"
 #include "hetu/impl/utils/cuda_utils.h"
-
-
 
 namespace hetu {
 namespace impl {
