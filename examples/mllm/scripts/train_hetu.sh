@@ -10,9 +10,9 @@ IMAGE_SIZE=${8:-224}
 # SERVER_ADDR=${7:-"${IP_2}"} # worker-0
 SERVER_ADDR=${7:-"127.0.0.1"} # 216
 SERVER_PORT=${8:-"23456"}
-HOST_FILE_PATH=${9:-"/home/gehao/njw1123/merge_all/examples/mllm/scripts/host.yaml"}
+HOST_FILE_PATH=${9:-"./scripts/host.yaml"}
 # HOST_FILE_PATH=${9:-"${ENV_PATH}/host.yaml"}
-ENV_FILE_PATH=${10:-"/home/gehao/njw1123/merge_all/examples/mllm/scripts/env_4090.sh"}
+ENV_FILE_PATH=${10:-"./scripts/env_4090.sh"}
 
 NUM_GPUS=6
 VISION_MULTI_TP_PP_LIST="[[(1, 1), (1, 1)],]"
@@ -26,7 +26,7 @@ LOG_FOLDER=logs/case${CASE}/llama${MODEL_SIZE}_gpus${NUM_GPUS}_gbs${GLOBAL_BATCH
 mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 
-ROOT_FOLDER=/home/gehao/njw1123/merge/examples/pretrain/data
+ROOT_FOLDER=../../../examples/pretrain/data
 JSON_FILE=${ROOT_FOLDER}/wikipedia_zea-llama_text_document
 JSON_KEY=content
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json

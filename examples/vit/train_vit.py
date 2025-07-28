@@ -319,8 +319,6 @@ def pretrain(args):
                         print(f"{local_device}:", file=file)
                         print(e, file=file)
                     os.killpg(0, signal.SIGTERM)
-                # torch.cuda.cudart().cudaProfilerStop()
-                # prof.export_chrome_trace(f"/home/gehao/njw1123/hetu_mm/examples/mllm/trace_{local_device}.json")
                 print("train done!")
             else:
                 try:

@@ -10,8 +10,8 @@ import time
 from data_utils import HetuMLLMProcessor, HetuImageProcessor, build_tokenizer
 
 class NExTQADataset(Dataset):
-    def __init__(self, tokenizer, text_path = "/home/pkuhetu/njw1123/hetu_mm/python/hetu/engine/data/multimodal_data/NExTQA/MC/test-00000-of-00001.parquet",
-        vision_path = "/home/pkuhetu/njw1123/hetu_mm/python/hetu/engine/data/multimodal_data/NExTQA/NExTVideo", args = None):
+    def __init__(self, tokenizer, text_path = "../../../../python/hetu/data/multimodal_data/NExTQA/MC/test-00000-of-00001.parquet",
+        vision_path = "../../../../python/hetu/data/multimodal_data/NExTQA/NExTVideo", args = None):
         """
         初始化NExTQA数据集
         Args:

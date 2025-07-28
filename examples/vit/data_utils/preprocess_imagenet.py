@@ -1,8 +1,8 @@
 import os
 import shutil
 
-src_dir = "/home/gehao/njw1123/merge/examples/vit/imagenet"
-dst_dir = "/home/gehao/njw1123/imagenet/train"
+src_dir = "../../../examples/vit/imagenet"
+dst_dir = "../../../imagenet/train"
 
 os.makedirs(dst_dir, exist_ok=True)
 

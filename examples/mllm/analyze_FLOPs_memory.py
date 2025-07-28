@@ -106,7 +106,7 @@ def analyze_FLOPs_memory(vision_seq_len_list, llm_seq_len_list, vision_config, l
     total_vision_flops = 0
     total_llm_flops = 0
     for vision_seq_len in vision_seq_len_list:
-        # 计算FLOPs
+        # Calculate FLOPs
         vision_flops = cal_vision_flops(
             1, 
             vision_seq_len, 
@@ -131,7 +131,7 @@ def analyze_FLOPs_memory(vision_seq_len_list, llm_seq_len_list, vision_config, l
         total_llm_flops += llm_flops
     total_flops = total_vision_flops + total_llm_flops
     
-    # 计算模型参数内存
+    # Calculate model parameter memory
     vision_model_memory = cal_vision_memory(
         vision_num_layers, 
         vision_hidden_size, 
@@ -149,7 +149,7 @@ def analyze_FLOPs_memory(vision_seq_len_list, llm_seq_len_list, vision_config, l
     )
     total_model_memory = vision_model_memory + llm_model_memory
     
-    # 计算混合精度训练内存
+    # Calculate mixed precision training memory
     mixed_training_memory = cal_mixed_training_memory(
         vision_num_layers, 
         llm_num_layers, 
@@ -163,7 +163,7 @@ def analyze_FLOPs_memory(vision_seq_len_list, llm_seq_len_list, vision_config, l
         llm_vocab_size
     )
     
-    # 计算激活内存
+    # Calculate activation memory
     vision_activation_memory = cal_vision_activation_memory(
         1, 
         vision_seq_len_list[0], 
@@ -180,8 +180,8 @@ def analyze_FLOPs_memory(vision_seq_len_list, llm_seq_len_list, vision_config, l
     )
 
     
-    # 输出结果
-    print("模型配置")
+    # Output results
+    print("Model Configuration")
     print("--------------------------------")
     print(f"vision_seq_len_list: {vision_seq_len_list}")
     print(f"llm_seq_len_list: {llm_seq_len_list}")
@@ -194,17 +194,17 @@ def analyze_FLOPs_memory(vision_seq_len_list, llm_seq_len_list, vision_config, l
     print(f"patch_size: {patch_size}")
     print(f"temporal_patch_size: {temporal_patch_size}")
     print("--------------------------------")
-    print(f"Vision模型FLOPs: {total_vision_flops/1e12:.2f} TFLOPs")
-    print(f"LLM模型FLOPs: {total_llm_flops/1e12:.2f} TFLOPs")
-    print(f"总FLOPs: {total_flops/1e12:.2f} TFLOPs")
+    print(f"Vision Model FLOPs: {total_vision_flops/1e12:.2f} TFLOPs")
+    print(f"LLM Model FLOPs: {total_llm_flops/1e12:.2f} TFLOPs")
+    print(f"Total FLOPs: {total_flops/1e12:.2f} TFLOPs")
     
-    print(f"\nVision模型参数内存: {vision_model_memory/1e9:.2f} GB")
-    print(f"LLM模型参数内存: {llm_model_memory/1e9:.2f} GB")
-    print(f"总模型参数内存: {total_model_memory/1e9:.2f} GB")
+    print(f"\nVision Model Parameter Memory: {vision_model_memory/1e9:.2f} GB")
+    print(f"LLM Model Parameter Memory: {llm_model_memory/1e9:.2f} GB")
+    print(f"Total Model Parameter Memory: {total_model_memory/1e9:.2f} GB")
     
-    print(f"\n混合精度训练内存: {mixed_training_memory/1e9:.2f} GB")
-    print(f"激活内存: {vision_activation_memory/1e9:.2f} GB")
-    print(f"激活内存: {llm_activation_memory/1e9:.2f} GB")
+    print(f"\nMixed Precision Training Memory: {mixed_training_memory/1e9:.2f} GB")
+    print(f"Vision Activation Memory: {vision_activation_memory/1e9:.2f} GB")
+    print(f"LLM Activation Memory: {llm_activation_memory/1e9:.2f} GB")
     
     print("--------------------------------") 
 
@@ -225,7 +225,7 @@ def main():
     total_vision_flops = 0
     total_llm_flops = 0
     for vision_seq_len in vision_seq_len_list:
-        # 计算FLOPs
+        # Calculate FLOPs
         vision_flops = cal_vision_flops(
             1, 
             vision_seq_len, 
@@ -250,7 +250,7 @@ def main():
         total_llm_flops += llm_flops
     total_flops = total_vision_flops + total_llm_flops
     
-    # 计算模型参数内存
+    # Calculate model parameter memory
     vision_model_memory = cal_vision_memory(
         vision_num_layers, 
         vision_hidden_size, 
@@ -268,7 +268,7 @@ def main():
     )
     total_model_memory = vision_model_memory + llm_model_memory
     
-    # 计算混合精度训练内存
+    # Calculate mixed precision training memory
     mixed_training_memory = cal_mixed_training_memory(
         vision_num_layers, 
         llm_num_layers, 
@@ -282,7 +282,7 @@ def main():
         llm_vocab_size
     )
     
-    # 计算激活内存
+    # Calculate activation memory
     activation_memory = cal_activation_memory(
         1, 
         vision_seq_len_list[0], 
@@ -295,8 +295,8 @@ def main():
         llm_mlp_dim
     )
     
-    # 输出结果
-    print("模型配置")
+    # Output results
+    print("Model Configuration")
     print("--------------------------------")
     print(f"vision_seq_len_list: {vision_seq_len_list}")
     print(f"llm_seq_len_list: {llm_seq_len_list}")
@@ -309,16 +309,16 @@ def main():
     print(f"patch_size: {patch_size}")
     print(f"temporal_patch_size: {temporal_patch_size}")
     print("--------------------------------")
-    print(f"Vision模型FLOPs: {total_vision_flops/1e12:.2f} TFLOPs")
-    print(f"LLM模型FLOPs: {total_llm_flops/1e12:.2f} TFLOPs")
-    print(f"总FLOPs: {total_flops/1e12:.2f} TFLOPs")
+    print(f"Vision Model FLOPs: {total_vision_flops/1e12:.2f} TFLOPs")
+    print(f"LLM Model FLOPs: {total_llm_flops/1e12:.2f} TFLOPs")
+    print(f"Total FLOPs: {total_flops/1e12:.2f} TFLOPs")
     
-    print(f"\nVision模型参数内存: {vision_model_memory/1e9:.2f} GB")
-    print(f"LLM模型参数内存: {llm_model_memory/1e9:.2f} GB")
-    print(f"总模型参数内存: {total_model_memory/1e9:.2f} GB")
+    print(f"\nVision Model Parameter Memory: {vision_model_memory/1e9:.2f} GB")
+    print(f"LLM Model Parameter Memory: {llm_model_memory/1e9:.2f} GB")
+    print(f"Total Model Parameter Memory: {total_model_memory/1e9:.2f} GB")
     
-    print(f"\n混合精度训练内存: {mixed_training_memory/1e9:.2f} GB")
-    print(f"激活内存: {activation_memory/1e9:.2f} GB")
+    print(f"\nMixed Precision Training Memory: {mixed_training_memory/1e9:.2f} GB")
+    print(f"Activation Memory: {activation_memory/1e9:.2f} GB")
     
     print("--------------------------------") 
 

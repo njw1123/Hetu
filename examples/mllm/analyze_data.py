@@ -63,7 +63,7 @@ def plot_2d_list_as_bars(data_2d, name):
     
     # 保存图表
     try:
-        plt.savefig(f'/home/pkuhetu/njw1123/hetu_mm/examples/mllm/images/{name}.png')
+        plt.savefig(f'../../examples/mllm/images/{name}.png')
         print(f"成功保存图表到 {name}.png")
     except Exception as e:
         print(f"保存图表失败: {str(e)}")
@@ -81,7 +81,7 @@ def process_sample(dataset, idx):
 def analyze_length(global_batch_size_, vision_max_seqlen_, text_max_seqlen_):
 
     tokenizer = None
-    ROOT_PATH ="/home/pkuhetu/njw1123/hetu_mm/python/hetu/engine/data"
+    ROOT_PATH ="../../python/hetu/engine/data"
     args = argparse.Namespace()
     args.tokenizer_type = "GPT2BPETokenizer"
     args.vocab_file = ROOT_PATH + "/gpt2-vocab.json"
@@ -137,7 +137,7 @@ def analyze_length(global_batch_size_, vision_max_seqlen_, text_max_seqlen_):
     
     # Save the plot
     try:
-        plt.savefig(f'/home/pkuhetu/njw1123/hetu_mm/examples/mllm/images/video_maxseq{vision_max_seqlen_}.png')
+        plt.savefig(f'../../examples/mllm/images/video_maxseq{vision_max_seqlen_}.png')
         print(f"Successfully saved video length distribution plot")
     except Exception as e:
         print(f"Failed to save plot: {str(e)}")
@@ -153,7 +153,7 @@ def analyze(global_batch_size_, vision_dp_size_, llm_dp_size_, vision_max_seqlen
     tokenizer = None
     alignment = 128
     IMAGE_TOKEN = -200
-    ROOT_PATH ="/home/pkuhetu/njw1123/hetu_mm/python/hetu/engine/data"
+    ROOT_PATH ="../../python/hetu/engine/data"
     args = argparse.Namespace()
     args.tokenizer_type = "GPT2BPETokenizer"
     args.vocab_file = ROOT_PATH + "/gpt2-vocab.json"

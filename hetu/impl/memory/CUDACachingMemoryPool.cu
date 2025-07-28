@@ -226,48 +226,48 @@ DataPtr CUDACachingMemoryPool::AllocDataSpace(size_t num_bytes,
   // Cannot find any avaiable memory to re-use, then AllocPtr from system.
   // *只有这种情况会AllocPtr并将新分配的data ptr放入到info中
   else {
-    // 输出所有cache住的显存情况，帮助调试为什么没有找到合适的cache显存
-    HT_LOG_INFO << "无法找到合适的cache显存，当前cache情况如下:";
-    HT_LOG_INFO << "请求分配大小: " << static_cast<double>(aligned_num_bytes) / (1024 * 1024) << " MiB";
+    // Output all cached memory information to help debug why no suitable cached memory was found
+    HT_LOG_DEBUG << "Unable to find suitable cached memory, current cache status is as follows:";
+    HT_LOG_DEBUG << "Requested allocation size: " << static_cast<double>(aligned_num_bytes) / (1024 * 1024) << " MiB";
     
-    // 输出当前流的cache情况
+    // Output the cache status of the current stream
     if (curr_stream_table) {
       size_t curr_stream_cache_count = curr_stream_table->table.size();
-      HT_LOG_INFO << "当前流cache数量: " << curr_stream_cache_count;
+      HT_LOG_DEBUG << "Current stream cache count: " << curr_stream_cache_count;
       if (curr_stream_cache_count > 0) {
-        HT_LOG_INFO << "当前流cache详情:";
+        HT_LOG_DEBUG << "Current stream cache details:";
         for (const auto& data_ptr : curr_stream_table->table) {
           auto info_it = _data_ptr_info.find(data_ptr.id);
           HT_ASSERT(info_it != _data_ptr_info.end())
             << "Cannot find the info of data ptr " << data_ptr;
-          HT_LOG_INFO << "  - 大小: " << static_cast<double>(data_ptr.size) / (1024 * 1024) 
+            HT_LOG_DEBUG << "  - Size: " << static_cast<double>(data_ptr.size) / (1024 * 1024) 
                       << " MiB, ID: " << data_ptr.id
-                      << ", 状态: " << info_it->second->status;
+                      << ", Status: " << info_it->second->status;
         }
       }
     } else {
-      HT_LOG_INFO << "当前流没有cache表";
+      HT_LOG_DEBUG << "No cache table for the current stream";
     }
 
-    // 输出所有流共享的cache情况
+    // Output the cache status shared by all streams
     size_t all_stream_cache_count = _available_for_all_streams->table.size();
-    HT_LOG_INFO << "所有流共享cache数量: " << all_stream_cache_count;
+    HT_LOG_DEBUG << "All streams shared cache count: " << all_stream_cache_count;
     if (all_stream_cache_count > 0) {
-      HT_LOG_INFO << "所有流共享cache详情:";
+      HT_LOG_DEBUG << "All streams shared cache details:";
       for (const auto& data_ptr : _available_for_all_streams->table) {
         auto info_it = _data_ptr_info.find(data_ptr.id);
         HT_ASSERT(info_it != _data_ptr_info.end())
           << "Cannot find the info of data ptr " << data_ptr;
-        HT_LOG_INFO << "  - 大小: " << static_cast<double>(data_ptr.size) / (1024 * 1024) 
+          HT_LOG_DEBUG << "  - Size: " << static_cast<double>(data_ptr.size) / (1024 * 1024) 
                     << " MiB, ID: " << data_ptr.id
-                    << ", 状态: " << info_it->second->status;
+                    << ", Status: " << info_it->second->status;
       }
     }
     
-    // 输出总体内存使用情况
-    HT_LOG_INFO << "总内存使用: 已分配=" << static_cast<double>(_allocated) / (1024 * 1024) 
-                << " MiB, 已预留=" << static_cast<double>(_reserved) / (1024 * 1024) 
-                << " MiB, 峰值=" << static_cast<double>(_peak_reserved) / (1024 * 1024) << " MiB";
+    // Output overall memory usage
+    HT_LOG_DEBUG << "Total memory usage: Allocated=" << static_cast<double>(_allocated) / (1024 * 1024) 
+                << " MiB, Reserved=" << static_cast<double>(_reserved) / (1024 * 1024) 
+                << " MiB, Peak=" << static_cast<double>(_peak_reserved) / (1024 * 1024) << " MiB";
     void* ptr;
     // Now use aligned_num_bytes
     // size_t malloc_size = GetAlignedMallocSize(aligned_num_bytes); 

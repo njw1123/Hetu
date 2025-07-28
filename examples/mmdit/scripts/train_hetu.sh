@@ -61,7 +61,7 @@ LOG_FOLDER=logs/case${CASE}/llama${MODEL_SIZE}_gpus${NUM_GPUS}_gbs${GLOBAL_BATCH
 mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 
-ROOT_FOLDER=/home/gehao/njw1123/precision_alignment/python_refactor/elastic/engine/data
+ROOT_FOLDER=Hetu/python_refactor/elastic/engine/data
 JSON_FILE=${ROOT_FOLDER}/wikipedia_zea-llama_text_document
 JSON_KEY=content
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json

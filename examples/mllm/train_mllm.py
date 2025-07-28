@@ -239,13 +239,7 @@ def pretrain(args):
         for epoch in range(args.epochs):
             strategy_id = 0
 
-            # if profiler is not None:
-                # profiler.start()
-
             consumed_samples = run_plan("train", epoch, consumed_samples, strategy_id, args.max_seq_len)
-            # if profiler is not None:
-                # profiler.stop()
-                # profiler.export_chrome_trace(f"/home/pkuhetu/njw1123/hetu_mm/examples/mllm/tensorboard_log/trace_{local_device}.json")
             return consumed_samples
 
     def run_plan(
@@ -447,9 +441,6 @@ def pretrain(args):
                 loss_out = results[0][0].numpy(force=True).mean()
                 print(f"{local_device}: [Epoch {epoch}] (step {step}, consumed_samples = {consumed_samples}): loss = {loss_out:.3f}, time = {end_time - start_time:.4f}")
         
-        if profiler is not None:
-            print("profiler is not None" )
-            profiler.export_chrome_trace(f"/home/pkuhetu/njw1123/hetu_mm/examples/mllm/tensorboard_log/trace_{local_device}.json")
         return consumed_samples
 
     start()

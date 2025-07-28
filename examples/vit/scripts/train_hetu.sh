@@ -14,8 +14,8 @@ SERVER_ADDR=${7:-"127.0.0.1"} # 216
 SERVER_PORT=${8:-"23333"}
 IMAGE_SIZE=${9:-224}
 NUM_CLASSES=${10:-10}
-HOST_FILE_PATH=${9:-"/home/gehao/njw1123/merge_all/examples/vit/scripts/host.yaml"}
-ENV_FILE_PATH=${10:-"/home/gehao/njw1123/merge_all/examples/vit/scripts/env_4090.sh"}
+HOST_FILE_PATH=${9:-"./scripts/host.yaml"}
+ENV_FILE_PATH=${10:-"./scripts/env_4090.sh"}
 
 CASE=1
 if [[ ${CASE} -eq 1 ]]; then
@@ -66,13 +66,13 @@ LOG_FOLDER=logs/case${CASE}/llama${MODEL_SIZE}_gpus${NUM_GPUS}_gbs${GLOBAL_BATCH
 mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 
-ROOT_FOLDER=/home/gehao/njw1123/Hetu/examples/mllm/data
+ROOT_FOLDER=../../../examples/mllm/data
 JSON_FILE=${ROOT_FOLDER}/wikipedia_zea-llama_text_document
 JSON_KEY=content
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json
 MERGE_FILE=${ROOT_FOLDER}/merges.txt
 
-DATA_PATH="/home/gehao/njw1123/imagenet"
+DATA_PATH="../../../imagenet/"
 
 if [ ! -d "ds_parallel_config" ]; then
   mkdir "ds_parallel_config"
